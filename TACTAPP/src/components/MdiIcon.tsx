@@ -1,0 +1,41 @@
+import React from 'react';
+import Svg, { Path } from 'react-native-svg';
+
+interface MdiIconProps {
+  path: string;
+  size?: number;
+  color?: string;
+}
+
+// Component สำหรับใช้ MDI icons ใน React Native
+export const MdiIcon: React.FC<MdiIconProps> = ({ 
+  path, 
+  size = 24, 
+  color = '#000000' 
+}) => {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24">
+      <Path d={path} fill={color} />
+    </Svg>
+  );
+};
+
+// ===== MDI Icon Paths (เก็บไว้ในไฟล์เดียวกัน ไม่ต้อง import @mdi/js) =====
+
+// CCS2 Plug Icon
+export const mdiEvPlugCcs2 = "M17 11V7H15V5H17V4H15V2H13V4H11V2H9V4H7V5H9V7H7V11L5 13V22H19V13L17 11M9 7H15V10.47L16.22 12H7.78L9 10.47V7M17 20H7V14H17V20M9 16H11V18H9V16M13 16H15V18H13V16Z";
+
+// Power Plug Icon  
+export const mdiPowerPlug = "M16,7V3H14V7H10V3H8V7H8C7,7 6,8 6,9V14.5L9.5,18V21H14.5V18L18,14.5V9C18,8 17,7 16,7Z";
+
+// Alternative: Type 2 Plug
+export const mdiEvPlugType2 = "M12 2C8.14 2 5 5.14 5 9C5 11.38 6.19 13.47 8 14.74V17C8 17.55 8.45 18 9 18H15C15.55 18 16 17.55 16 17V14.74C17.81 13.47 19 11.38 19 9C19 5.14 15.86 2 12 2M9 21V20H15V21C15 21.55 14.55 22 14 22H10C9.45 22 9 21.55 9 21M12 4C14.76 4 17 6.24 17 9C17 10.65 16.21 12.1 15 13V16H9V13C7.79 12.1 7 10.65 7 9C7 6.24 9.24 4 12 4Z";
+
+// Lightning Bolt
+export const mdiLightningBolt = "M11 15H6L13 1V9H18L11 23V15Z";
+
+// Car Electric
+export const mdiCarElectric = "M18.92 2C18.72 1.42 18.16 1 17.5 1H6.5C5.84 1 5.28 1.42 5.08 2L3 8V16C3 16.55 3.45 17 4 17H5C5.55 17 6 16.55 6 16V15H18V16C18 16.55 18.45 17 19 17H20C20.55 17 21 16.55 21 16V8L18.92 2M6.5 12C5.67 12 5 11.33 5 10.5S5.67 9 6.5 9 8 9.67 8 10.5 7.33 12 6.5 12M17.5 12C16.67 12 16 11.33 16 10.5S16.67 9 17.5 9 19 9.67 19 10.5 18.33 12 17.5 12M5 7L6.5 2.5H17.5L19 7H5M7 20H11V18L17 21H13V23L7 20Z";
+
+// EV Station
+export const mdiEvStation = "M19.77 7.23L19.78 7.22L16.06 3.5L15 4.56L17.11 6.67C16.17 7 15.5 7.93 15.5 9C15.5 10.38 16.62 11.5 18 11.5C18.36 11.5 18.69 11.42 19 11.29V18.5C19 19.05 18.55 19.5 18 19.5S17 19.05 17 18.5V14C17 12.9 16.1 12 15 12H14V5C14 3.9 13.1 3 12 3H6C4.9 3 4 3.9 4 5V21H14V13.5H15.5V18.5C15.5 19.88 16.62 21 18 21S20.5 19.88 20.5 18.5V9C20.5 8.31 20.22 7.68 19.77 7.23M18 10C17.45 10 17 9.55 17 9S17.45 8 18 8 19 8.45 19 9 18.55 10 18 10M8 18V13.5L6 15L12 8V12.5L14 11L8 18Z";
