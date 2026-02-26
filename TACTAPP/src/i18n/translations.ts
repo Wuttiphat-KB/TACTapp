@@ -25,6 +25,8 @@ export const translations = {
     invalidPhone: 'Please enter a valid phone number (9-10 digits)',
     passwordMismatch: 'Passwords do not match',
     mustAgreeTerms: 'You must agree to the terms and conditions',
+    registerSuccess: 'Registration successful! Please login with your credentials.',
+    registerFailed: 'Registration failed. Please try again.',
     
     // Forgot Password
     forgotPasswordDesc: 'Enter your email address and we will send you a temporary password.',
@@ -152,6 +154,8 @@ export const translations = {
     invalidPhone: 'กรุณากรอกเบอร์โทรที่ถูกต้อง (9-10 หลัก)',
     passwordMismatch: 'รหัสผ่านไม่ตรงกัน',
     mustAgreeTerms: 'กรุณายอมรับข้อกำหนดและเงื่อนไข',
+    registerSuccess: 'สมัครสมาชิกสำเร็จ! กรุณาเข้าสู่ระบบด้วยข้อมูลของคุณ',
+    registerFailed: 'สมัครสมาชิกไม่สำเร็จ กรุณาลองใหม่',
     
     // Forgot Password
     forgotPasswordDesc: 'กรอกอีเมลของคุณ เราจะส่งรหัสผ่านชั่วคราวให้',

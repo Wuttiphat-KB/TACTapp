@@ -39,7 +39,7 @@ export const ChargerScreen: React.FC<ChargerScreenProps> = ({
   onTabChange,
   isLoading = false,
 }) => {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const [selectedCharger, setSelectedCharger] = useState<Charger | null>(null);
 
   if (!station) {
@@ -78,6 +78,8 @@ export const ChargerScreen: React.FC<ChargerScreenProps> = ({
       case 'Faulted':
       case 'Inactive':
         return 'text-red-500';
+      case 'Disabled':
+        return 'text-gray-400';
       default:
         return 'text-gray-500';
     }
@@ -87,13 +89,21 @@ export const ChargerScreen: React.FC<ChargerScreenProps> = ({
     return isCharging && currentChargerId === charger.id;
   };
 
+  const isChargerDisabled = (charger: Charger) => {
+    return charger.enabled === false || charger.status === 'Disabled';
+  };
+
   const isChargerSelectable = (charger: Charger) => {
+    if (isChargerDisabled(charger)) return false;
     if (isMyCharging(charger)) return true;
     if (charger.status === 'Available' || charger.status === 'Preparing') return true;
     return false;
   };
 
   const getDisplayStatus = (charger: Charger) => {
+    if (isChargerDisabled(charger)) {
+      return language === 'th' ? 'ปิดให้บริการ' : 'Disabled';
+    }
     if (isMyCharging(charger)) {
       return t('yourCharging');
     }
@@ -114,6 +124,9 @@ export const ChargerScreen: React.FC<ChargerScreenProps> = ({
   };
 
   const getDisplayStatusColor = (charger: Charger) => {
+    if (isChargerDisabled(charger)) {
+      return 'text-gray-400';
+    }
     if (isMyCharging(charger)) {
       return 'text-blue-500';
     }
@@ -190,33 +203,43 @@ export const ChargerScreen: React.FC<ChargerScreenProps> = ({
         {/* Chargers List */}
         <View className="mt-4 px-4">
           {station.chargers.map((charger) => {
+            const isDisabled = isChargerDisabled(charger);
             const isSelectable = isChargerSelectable(charger);
             const isSelected = selectedCharger?.id === charger.id;
             const isMyChargingCharger = isMyCharging(charger);
-            const iconColor = isSelectable ? '#22c55e' : '#9ca3af';
-            const bgColor = isSelectable ? '#f0fdf4' : '#f3f4f6';
+            
+            // สีสำหรับ icon และ background
+            const iconColor = isDisabled ? '#d1d5db' : isSelectable ? '#22c55e' : '#9ca3af';
+            const bgColor = isDisabled ? '#f3f4f6' : isSelectable ? '#f0fdf4' : '#f3f4f6';
+            const borderColor = isDisabled 
+              ? 'border-gray-200' 
+              : isSelected 
+                ? 'border-green-500' 
+                : isMyChargingCharger 
+                  ? 'border-blue-500' 
+                  : 'border-gray-200';
             
             return (
               <TouchableOpacity
                 key={charger.id}
-                className={`bg-white border-2 rounded-lg p-4 mb-3 ${
-                  isSelected ? 'border-green-500' : isMyChargingCharger ? 'border-blue-500' : 'border-gray-200'
-                }`}
+                className={`bg-white border-2 rounded-lg p-4 mb-3 ${borderColor}`}
                 onPress={() => {
                   if (isSelectable) {
                     setSelectedCharger(charger);
                   }
                 }}
                 disabled={!isSelectable || isLoading}
-                style={{ opacity: isSelectable ? 1 : 0.5 }}
+                style={{ opacity: isDisabled ? 0.5 : isSelectable ? 1 : 0.7 }}
               >
                 <View className="flex-row justify-between items-center">
                   <View>
-                    <Text className="font-semibold text-gray-800">{charger.type}</Text>
+                    <Text className={`font-semibold ${isDisabled ? 'text-gray-400' : 'text-gray-800'}`}>
+                      {charger.type}
+                    </Text>
                     <Text className={`text-sm ${getDisplayStatusColor(charger)}`}>
                       {getDisplayStatus(charger)}
                     </Text>
-                    <Text className="text-gray-500 text-sm mt-1">
+                    <Text className={`text-sm mt-1 ${isDisabled ? 'text-gray-300' : 'text-gray-500'}`}>
                       {t('pricePerKwh')} {charger.pricePerKwh.toFixed(2)} {t('bahtPerKwh')}
                     </Text>
                   </View>

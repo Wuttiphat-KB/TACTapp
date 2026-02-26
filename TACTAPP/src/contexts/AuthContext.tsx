@@ -1,3 +1,4 @@
+// C:\Users\Asus\Documents\TACT\TACTAPP\src\contexts\AuthContext.tsx
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { User } from '../types';
 import { apiClient } from '../services/api';
@@ -16,7 +17,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState(true); // true เพื่อเช็ค token ตอนเปิดแอป
+  const [isLoading, setIsLoading] = useState(true);
 
   // ตรวจสอบ token ตอนเปิดแอป (auto-login)
   useEffect(() => {
@@ -83,6 +84,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
+  // Register - ไม่ auto-login, แค่สร้าง user แล้ว return success
   const register = async (userData: Omit<User, 'id' | 'role'>): Promise<{ success: boolean; message?: string }> => {
     setIsLoading(true);
     try {
@@ -96,22 +98,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       });
 
       if (response.success && response.data) {
-        await apiClient.setToken(response.data.token);
+        // ไม่เก็บ token และไม่ set user — ให้ user login เอง
+        // await apiClient.setToken(response.data.token);  // ❌ ไม่ทำ
+        // setUser(...)                                     // ❌ ไม่ทำ
 
-        const u = response.data.user;
-        setUser({
-          id: u.id,
-          username: u.username,
-          email: u.email,
-          password: '',
-          phone: u.phone || '',
-          whatsapp: u.whatsapp || '',
-          line: u.line || '',
-          role: u.role as 'Admin' | 'User',
-          rememberMe: false,
-        });
-
-        return { success: true };
+        return { success: true, message: 'Registration successful' };
       }
 
       return {

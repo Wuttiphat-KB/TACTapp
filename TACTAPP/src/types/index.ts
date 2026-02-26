@@ -1,3 +1,5 @@
+// C:\Users\Asus\Documents\TACT\TACTAPP\src\types\index.ts
+
 // User Types
 export interface User {
   id: string;
@@ -13,14 +15,17 @@ export interface User {
 
 // Station Types
 export interface Station {
+  _id?: string;
   id: string;
   name: string;
+  visible?: boolean;     // ← เพิ่มใหม่: ซ่อน/แสดงใน map
   location: {
     address: string;
     latitude: number;
     longitude: number;
   };
   model: string;
+  chargerModel?: string;
   status: 'Online' | 'Offline';
   generatorFuelLevel: number; // ปริมาณน้ำมันในเครื่อง Generator
   chargers: Charger[];
@@ -33,7 +38,9 @@ export interface Charger {
   stationId: string;
   type: 'CCS2' | 'AC';
   pricePerKwh: number; // บาท/kWh
-  status: 'Available' | 'Preparing' | 'Charging' | 'Finishing' | 'Faulted' | 'Offline';
+  status: 'Available' | 'Preparing' | 'Charging' | 'Finishing' | 'Faulted' | 'Offline' | 'Disabled';
+  enabled?: boolean;     // ← เพิ่มใหม่: enable/disable หัวชาร์จ
+  connectorId?: number;  // ← เพิ่มใหม่: OCPP connector ID (1 or 2)
 }
 
 // Real-time Charging Data
@@ -43,7 +50,7 @@ export interface ChargingSession {
   stationId: string;
   userId: string;
   soc: number | null; // เฉพาะ DC, AC ไม่แสดง SOC
-  state: 'Charging' | 'Stopped' | 'Completed' | 'Faulted';
+  state: 'Preparing' | 'Charging' | 'Stopped' | 'Completed' | 'Faulted'; // ← เพิ่ม Preparing
   powerKw: number; // Power ที่จ่ายอยู่
   chargingTime: number; // เวลาที่ชาร์จไป (seconds)
   energyCharged: number; // kWh สะสม

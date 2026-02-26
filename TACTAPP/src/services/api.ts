@@ -192,23 +192,16 @@ class ApiClient {
 
   // ===== Charging Methods =====
 
-  async startCharging(stationId: string, chargerId: string): Promise<ApiResponse<any>> {
+  async startCharging(stationId: string, chargerId: string, connectorId: number = 1): Promise<ApiResponse<any>> {
     return this.request('/charging/start', {
       method: 'POST',
-      body: JSON.stringify({ stationId, chargerId }),
+      body: JSON.stringify({ stationId, chargerId, connectorId }),
     });
   }
 
-  async stopCharging(sessionId: string, data: {
-    energyCharged: number;
-    totalPrice: number;
-    chargingTime: number;
-    carbonReduce: number;
-    fuelUsed: number;
-  }): Promise<ApiResponse<any>> {
+  async stopCharging(sessionId: string): Promise<ApiResponse<any>> {
     return this.request(`/charging/${sessionId}/stop`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
+      method: 'POST',
     });
   }
 
@@ -227,7 +220,7 @@ class ApiClient {
 
   async reportFault(sessionId: string, errorCode: string, errorMessage: string): Promise<ApiResponse<any>> {
     return this.request(`/charging/${sessionId}/fault`, {
-      method: 'PUT',
+      method: 'POST',
       body: JSON.stringify({ errorCode, errorMessage }),
     });
   }

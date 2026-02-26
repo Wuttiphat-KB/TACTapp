@@ -20,6 +20,17 @@ import {
 import { BottomTabs, TabName } from './src/components/BottomTabs';
 import { Station, Charger, ChargingSession } from './src/types';
 import { apiClient } from './src/services/api';
+import {
+  connectSocket,
+  disconnectSocket,
+  joinSession,
+  leaveSession,
+  onMeterUpdate,
+  onChargingStarted,
+  onChargingStopped,
+  onChargingFaulted,
+  onConnectorStatus,
+} from './src/services/socket';
 
 import './global.css';
 
@@ -54,19 +65,159 @@ const AppContent: React.FC = () => {
   // Loading state for API calls
   const [isStartingCharge, setIsStartingCharge] = useState(false);
   const [isStoppingCharge, setIsStoppingCharge] = useState(false);
+  const [isWaitingUnplug, setIsWaitingUnplug] = useState(false);  // ← NEW: รอถอดสาย
 
-  // Random error codes for dev mode
-  const ERROR_CODES = [
-    'ERR_001', 'ERR_002', 'ERR_003', 'ERR_004',
-    'ERR_005', 'ERR_006', 'ERR_007', 'ERR_008',
-  ];
+  // Track if socket listeners are set up
+  const socketListenersRef = useRef(false);
 
+  // ========== Socket.IO Connection ==========
+  useEffect(() => {
+    if (isAuthenticated && user?.id) {
+      // เชื่อม Socket.IO เมื่อ login
+      console.log('[Socket] Connecting for user:', user.id);
+      connectSocket(user.id);
+      
+      // Setup event listeners (once)
+      if (!socketListenersRef.current) {
+        setupSocketListeners();
+        socketListenersRef.current = true;
+      }
+    } else {
+      // ตัดการเชื่อมต่อเมื่อ logout
+      disconnectSocket();
+      socketListenersRef.current = false;
+    }
+
+    return () => {
+      // Cleanup on unmount
+      disconnectSocket();
+    };
+  }, [isAuthenticated, user?.id]);
+
+  // ========== Socket Event Listeners ==========
+  const setupSocketListeners = () => {
+    // เมื่อ Charger เริ่มชาร์จจริง (ได้ transactionId)
+    onChargingStarted((data) => {
+      console.log('[Socket] Charging started:', data);
+      
+      setCurrentSession(prev => {
+        if (prev && prev.id === data.sessionId) {
+          return {
+            ...prev,
+            state: 'Charging',
+          };
+        }
+        return prev;
+      });
+    });
+
+    // อัพเดทค่า real-time ทุก ~4 วินาที
+    onMeterUpdate((data) => {
+      console.log('[Socket] Meter update:', data);
+      
+      setCurrentSession(prev => {
+        if (prev && prev.id === data.sessionId) {
+          return {
+            ...prev,
+            soc: data.soc || prev.soc,
+            powerKw: data.powerKw,
+            energyCharged: data.energyCharged,
+            chargingTime: data.chargingTime,
+            totalPrice: data.totalPrice,
+            carbonReduce: data.carbonReduce,
+          };
+        }
+        return prev;
+      });
+    });
+
+    // เมื่อชาร์จเสร็จ
+    onChargingStopped((data) => {
+      console.log('[Socket] Charging stopped:', data);
+      
+      // Reset waiting states
+      setIsWaitingUnplug(false);
+      setIsStoppingCharge(false);
+      
+      setCurrentSession(prev => {
+        if (prev && prev.id === data.sessionId) {
+          const updatedSession = {
+            ...prev,
+            state: 'Stopped' as const,
+            energyCharged: data.energyCharged,
+            chargingTime: data.chargingTime,
+            totalPrice: data.totalPrice,
+            carbonReduce: data.carbonReduce,
+            endTime: new Date(),
+          };
+          
+          // ไปหน้า Finishing
+          setIsCharging(false);
+          setCurrentScreen('Finishing');
+          
+          return updatedSession;
+        }
+        return prev;
+      });
+    });
+
+    // เมื่อเกิด Fault
+    onChargingFaulted((data) => {
+      console.log('[Socket] Charging faulted:', data);
+      
+      setFaultErrorCode(data.errorCode || 'ERR_FAULT');
+      setShowFault(true);
+    });
+
+    // อัพเดทสถานะ connector (broadcast ไปทุก client)
+    onConnectorStatus((data) => {
+      console.log('[Socket] Connector status:', data);
+      
+      // อัพเดท selectedStation.chargers status real-time
+      setSelectedStation(prev => {
+        if (!prev) return prev;
+        
+        const updatedChargers = prev.chargers.map(charger => {
+          // Map charger to connectorId
+          let chargerConnectorId = 1;
+          
+          // ลอง pattern "connector-X"
+          const match = charger.id.match(/connector-(\d+)/i);
+          if (match) {
+            chargerConnectorId = parseInt(match[1]);
+          }
+          // ถ้ามี "ccs2" → connector 2
+          else if (charger.id.toLowerCase().includes('ccs2')) {
+            chargerConnectorId = 2;
+          }
+          // ถ้าเป็น type CCS2 → connector 2
+          else if (charger.type === 'CCS2') {
+            chargerConnectorId = 2;
+          }
+          // Fallback: index + 1
+          else {
+            const idx = prev.chargers.findIndex(c => c.id === charger.id);
+            chargerConnectorId = idx + 1;
+          }
+          
+          if (chargerConnectorId === data.connectorId) {
+            console.log(`[Socket] Updating charger ${charger.id} status: ${charger.status} → ${data.status}`);
+            return { ...charger, status: data.status as any };
+          }
+          return charger;
+        });
+        
+        return { ...prev, chargers: updatedChargers };
+      });
+    });
+  };
+
+  // ========== Trigger Fault (manual) ==========
   const triggerFault = useCallback(async (code?: string) => {
-    const errorCode = code || ERROR_CODES[Math.floor(Math.random() * ERROR_CODES.length)];
+    const errorCode = code || 'ERR_MANUAL';
     setFaultErrorCode(errorCode);
     setShowFault(true);
 
-    // ===== API: Report fault to backend =====
     if (currentSession?.id) {
       try {
         await apiClient.reportFault(
@@ -77,65 +228,11 @@ const AppContent: React.FC = () => {
         console.log('[API] Fault reported:', errorCode);
       } catch (error) {
         console.error('[API] Failed to report fault:', error);
-        // ไม่ block UI — fault modal แสดงปกติ
       }
     }
-  }, [currentSession?.id]);
+  }, [currentSession]);
 
-  // Ref สำหรับเก็บ charger.pricePerKwh
-  const chargerPriceRef = useRef(0);
-  const faultTriggeredRef = useRef(false);
-
-  // Update price ref when charger changes
-  useEffect(() => {
-    if (selectedCharger) {
-      chargerPriceRef.current = selectedCharger.pricePerKwh;
-    }
-  }, [selectedCharger]);
-
-  // ===== DEV MODE CONFIG =====
-  const DEV_MODE = true;
-  const FAULT_AFTER_SECONDS = 10; // Fault หลังชาร์จไป X วินาที (0 = ปิด)
-  // ===========================
-
-  // Charging interval - รันตลอดแม้สลับ menu
-  useEffect(() => {
-    if (!isCharging || !currentSession) return;
-
-    const interval = setInterval(() => {
-      setCurrentSession(prev => {
-        if (!prev) return prev;
-        
-        const newChargingTime = prev.chargingTime + 1;
-        const energyAdded = (prev.powerKw / 3600);
-        const newEnergyCharged = prev.energyCharged + energyAdded;
-        const newSoc = prev.soc !== null ? Math.min(100, prev.soc + 0.05) : null;
-        const newTotalPrice = newEnergyCharged * chargerPriceRef.current;
-        const fuelUsed = newEnergyCharged * 0.3;
-        const carbonReduce = newEnergyCharged * 0.5;
-
-        // DEV MODE: Auto fault after X seconds
-        if (DEV_MODE && FAULT_AFTER_SECONDS > 0 && newChargingTime === FAULT_AFTER_SECONDS && !faultTriggeredRef.current) {
-          faultTriggeredRef.current = true;
-          setTimeout(() => triggerFault(), 100);
-        }
-
-        return {
-          ...prev,
-          chargingTime: newChargingTime,
-          energyCharged: newEnergyCharged,
-          soc: newSoc,
-          totalPrice: newTotalPrice,
-          fuelUsed,
-          carbonReduce,
-        };
-      });
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [isCharging, currentSession?.id, triggerFault]);
-
-  // Navigation handlers
+  // ========== Navigation Handlers ==========
   const handleLoadingFinish = useCallback(() => {
     setCurrentScreen(isAuthenticated ? 'MainTabs' : 'Login');
   }, [isAuthenticated]);
@@ -145,117 +242,178 @@ const AppContent: React.FC = () => {
   }, []);
 
   const handleLogout = useCallback(() => {
+    // Leave session room ถ้ามี
+    if (currentSession?.id) {
+      leaveSession(currentSession.id);
+    }
+    
+    disconnectSocket();
     setCurrentScreen('Login');
     setActiveTab('main');
     setIsCharging(false);
+    setIsWaitingUnplug(false);  // ← Reset
     setSelectedStation(null);
     setSelectedCharger(null);
     setCurrentSession(null);
-  }, []);
+  }, [currentSession]);
 
-  const handleSelectStation = useCallback((station: Station) => {
-    setSelectedStation(station);
+  // State สำหรับ loading ตอน refresh station
+  const [isRefreshingStation, setIsRefreshingStation] = useState(false);
+
+  const handleSelectStation = useCallback(async (station: Station) => {
+    setIsRefreshingStation(true);
+    
+    try {
+      // Refresh station data เพื่อดึง status ล่าสุดจาก CSMS
+      console.log('[App] Refreshing station data:', station.id);
+      const response = await apiClient.getStationById(station.id);
+      
+      if (response.success && response.data) {
+        console.log('[App] Station refreshed, chargers:', response.data.chargers?.map((c: any) => `${c.id}:${c.status}`));
+        setSelectedStation(response.data);
+      } else {
+        // Fallback ถ้า API fail
+        console.warn('[App] Station refresh failed, using cached data');
+        setSelectedStation(station);
+      }
+    } catch (error) {
+      console.error('[App] Station refresh error:', error);
+      // Fallback ถ้า API error
+      setSelectedStation(station);
+    } finally {
+      setIsRefreshingStation(false);
+    }
+    
     setCurrentScreen('StationDetail');
   }, []);
 
-  // ===== START CHARGING — เชื่อม API =====
+  // ========== START CHARGING — OCPP ==========
   const handleStartCharging = useCallback(async (charger: Charger) => {
-    if (isStartingCharge) return; // ป้องกันกดซ้ำ
+    if (isStartingCharge) return;
     setIsStartingCharge(true);
 
     try {
-      // เรียก API สร้าง session ใน Backend
+      // ===== กำหนด connectorId =====
+      // วิธี 1: ถ้า charger.id เป็น "connector-X" ใช้ตัวเลขนั้น
+      // วิธี 2: ถ้า charger.id มี "ccs2" → connector 2, มี "ac" → connector 1
+      // วิธี 3: ใช้ index ใน array + 1
+      
+      let connectorId = 1;
+      
+      // ลอง pattern "connector-X" ก่อน
+      const connectorMatch = charger.id.match(/connector-(\d+)/i);
+      if (connectorMatch) {
+        connectorId = parseInt(connectorMatch[1]);
+      }
+      // ถ้ามี "ccs2" ใน id → connector 2
+      else if (charger.id.toLowerCase().includes('ccs2')) {
+        connectorId = 2;
+      }
+      // ถ้าเป็น type CCS2 → connector 2
+      else if (charger.type === 'CCS2') {
+        connectorId = 2;
+      }
+      // Fallback: ใช้ index + 1
+      else {
+        const idx = selectedStation?.chargers.findIndex(c => c.id === charger.id) ?? 0;
+        connectorId = idx + 1;
+      }
+      
+      // Clamp to valid range 1-2
+      connectorId = Math.max(1, Math.min(2, connectorId));
+      
+      // หา stationId (MongoDB ใช้ _id)
+      const stationId = selectedStation?._id || selectedStation?.id || '';
+      
+      if (!stationId) {
+        Alert.alert('Error', 'Station not selected');
+        setIsStartingCharge(false);
+        return;
+      }
+      
+      console.log(`[App] Starting charge: stationId=${stationId}, charger.id=${charger.id}, type=${charger.type}, connectorId=${connectorId}`);
+
+      // เรียก API สร้าง session + ส่ง RemoteStart ไป Charger
       const response = await apiClient.startCharging(
-        selectedStation?.id || '',
-        charger.id
+        stationId,
+        charger.id,
+        connectorId
       );
 
       if (response.success && response.data) {
-        // Backend ส่งกลับมาเป็น { session, station, charger }
         const { session: backendSession } = response.data;
         const sessionId = backendSession._id || backendSession.id;
-        console.log('[API] Charging started, session:', sessionId);
+        console.log('[API] Charging command sent, session:', sessionId);
 
         setSelectedCharger(charger);
-        setIsCharging(true);
-        faultTriggeredRef.current = false;
-
-        // Map backend response → frontend ChargingSession
+        
+        // สร้าง session ใน state (state: "Preparing" รอ OCPP)
         const isDC = charger.type === 'CCS2';
         const newSession: ChargingSession = {
           id: sessionId,
           chargerId: charger.id,
-          stationId: selectedStation?.id || '',
+          stationId: stationId,
           userId: user?.id || '',
-          soc: isDC ? (backendSession.soc ?? 45) : null,
-          state: 'Charging',
-          powerKw: backendSession.powerKw || 30,
+          soc: isDC ? 0 : null,
+          state: 'Preparing',  // ← รอ chargingStarted event จาก Socket
+          powerKw: 0,
           chargingTime: 0,
           energyCharged: 0,
           status: 'Active',
           carbonReduce: 0,
           fuelUsed: 0,
           totalPrice: 0,
-          startTime: new Date(backendSession.startTime || Date.now()),
+          startTime: new Date(),
         };
 
         setCurrentSession(newSession);
-        setCurrentScreen('Charging');
+        setIsCharging(true);
+        setCurrentScreen('Charging');  // ไปหน้า Charging แต่ state ยังเป็น Preparing
+
+        // Join session room เพื่อรับ events
+        joinSession(sessionId);
+        
+        // Note: state จะเปลี่ยนเป็น "Charging" เมื่อได้ chargingStarted event
       } else {
-        // API ส่ง error กลับมา
         Alert.alert(
           'Error',
-          response.message || response.error || 'Failed to start charging. Please try again.'
+          response.message || response.error || 'Failed to start charging'
         );
       }
     } catch (error) {
       console.error('[API] Start charging error:', error);
-      Alert.alert(
-        'Connection Error',
-        'ไม่สามารถเชื่อมต่อ Server ได้ กรุณาลองใหม่'
-      );
+      Alert.alert('Connection Error', 'ไม่สามารถเชื่อมต่อ Server ได้');
     } finally {
       setIsStartingCharge(false);
     }
   }, [selectedStation, user, isStartingCharge]);
 
-  // ===== STOP CHARGING — เชื่อม API =====
+  // ========== STOP CHARGING — OCPP ==========
   const handleStopCharging = useCallback(async (session: ChargingSession) => {
-    if (isStoppingCharge) return; // ป้องกันกดซ้ำ
+    if (isStoppingCharge || isWaitingUnplug) return;
     setIsStoppingCharge(true);
 
     try {
-      // ส่งข้อมูลสรุปไป Backend
-      const response = await apiClient.stopCharging(session.id, {
-        energyCharged: session.energyCharged,
-        totalPrice: session.totalPrice,
-        chargingTime: session.chargingTime,
-        carbonReduce: session.carbonReduce,
-        fuelUsed: session.fuelUsed,
-      });
+      // เรียก API ส่ง RemoteStop ไป Charger
+      const response = await apiClient.stopCharging(session.id);
 
       if (response.success) {
-        console.log('[API] Charging stopped, session:', session.id);
+        console.log('[API] Stop command sent, waiting for charger...');
+        // แสดง Modal "กรุณาถอดสาย"
+        setIsWaitingUnplug(true);
+        setIsStoppingCharge(false);
+        // Note: session จะถูก update เมื่อได้ chargingStopped event จาก Socket
       } else {
-        console.warn('[API] Stop charging response:', response.message);
-        // ยังคงไปหน้า Finishing แม้ API error — เพราะ charging หยุดแล้วฝั่ง client
+        console.warn('[API] Stop response:', response.message);
+        setIsStoppingCharge(false);
+        // ยังคงรอ event จาก Socket
       }
     } catch (error) {
       console.error('[API] Stop charging error:', error);
-      // ยังคงไปหน้า Finishing — ข้อมูลอยู่ใน local session
-    } finally {
+      Alert.alert('Error', 'Failed to stop charging');
       setIsStoppingCharge(false);
     }
-
-    // ไปหน้า Finishing เสมอ (แม้ API fail)
-    setCurrentSession({
-      ...session,
-      state: 'Stopped',
-      endTime: new Date(),
-    });
-    setIsCharging(false);
-    setCurrentScreen('Finishing');
-  }, [isStoppingCharge]);
+  }, [isStoppingCharge, isWaitingUnplug]);
 
   const handleGoToCharging = useCallback(() => {
     setCurrentScreen('Charging');
@@ -263,27 +421,36 @@ const AppContent: React.FC = () => {
   }, []);
 
   const handleFinish = useCallback(() => {
-    setCurrentSession(null);
-    setSelectedCharger(null);
-    setSelectedStation(null);
+    // Leave session room
+    if (currentSession?.id) {
+      leaveSession(currentSession.id);
+    }
+
     setIsCharging(false);
+    setIsWaitingUnplug(false);  // ← Reset
+    setSelectedCharger(null);
+    setCurrentSession(null);
     setCurrentScreen('MainTabs');
     setActiveTab('main');
-  }, []);
+  }, [currentSession]);
 
-  // Tab change handler
   const handleTabChange = useCallback((tab: TabName) => {
     setActiveTab(tab);
     
-    if (tab === 'charger' && isCharging) {
-      setCurrentScreen('Charging');
-    } else {
+    // ถ้าอยู่หน้า StationDetail หรือ Charging แล้วกด tab อื่น → ไป MainTabs
+    // ยกเว้นกด charger tab ขณะอยู่หน้า Charging → ไม่ต้องทำอะไร (อยู่หน้าเดิม)
+    if (currentScreen === 'StationDetail' && tab !== 'charger') {
       setCurrentScreen('MainTabs');
     }
-  }, [isCharging]);
+    // ถ้าอยู่หน้า Charging แล้วกด tab อื่น → ไป MainTabs (แต่ยังชาร์จอยู่)
+    if (currentScreen === 'Charging' && tab !== 'charger') {
+      setCurrentScreen('MainTabs');
+    }
+  }, [currentScreen]);
 
   const handleFaultTryAgain = useCallback(() => {
     setShowFault(false);
+    // กลับไปหน้า Charging
   }, []);
 
   const handleContactSupport = useCallback(() => {
@@ -292,7 +459,7 @@ const AppContent: React.FC = () => {
     setCurrentScreen('MainTabs');
   }, []);
 
-  // Render current screen
+  // ========== Render Screen ==========
   const renderScreen = () => {
     switch (currentScreen) {
       case 'Loading':
@@ -311,7 +478,7 @@ const AppContent: React.FC = () => {
         return (
           <RegisterScreen
             onNavigateBack={() => setCurrentScreen('Login')}
-            onRegisterSuccess={handleLoginSuccess}
+            onRegisterSuccess={() => setCurrentScreen('Login')}
           />
         );
       
@@ -353,10 +520,15 @@ const AppContent: React.FC = () => {
             session={currentSession}
             onStop={handleStopCharging}
             onFault={() => triggerFault()}
-            onClose={() => setCurrentScreen('StationDetail')}
+            onClose={() => {
+              setCurrentScreen('MainTabs');
+              setActiveTab('main');
+            }}
             activeTab="charger"
             onTabChange={handleTabChange}
             isLoading={isStoppingCharge}
+            isPreparing={currentSession.state === 'Preparing'}
+            isWaitingUnplug={isWaitingUnplug}
           />
         );
       

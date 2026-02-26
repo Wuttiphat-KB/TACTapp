@@ -1,98 +1,94 @@
+// C:\Users\Asus\Documents\TACT\tact-backend\src\models\Station.ts
 import mongoose, { Document, Schema } from 'mongoose';
 
-// Interface สำหรับ Charger (หัวชาร์จ)
-export interface ICharger {
+// Charger subdocument interface
+interface ICharger {
   id: string;
   type: 'CCS2' | 'AC';
-  status: 'Available' | 'Preparing' | 'Charging' | 'Offline' | 'Faulted';
+  status: 'Available' | 'Preparing' | 'Charging' | 'Finishing' | 'Faulted' | 'Offline';
   pricePerKwh: number;
-  currentUserId?: mongoose.Types.ObjectId; // user ที่กำลังใช้งานอยู่
+  enabled: boolean;      // ← เพิ่มใหม่
+  connectorId?: number;  // ← เพิ่มใหม่: OCPP connector ID (1 or 2)
 }
 
-// Interface สำหรับ Location
-export interface ILocation {
-  address: string;
-  latitude: number;
-  longitude: number;
-}
-
-// Interface สำหรับ Station Document
+// Station document interface
 export interface IStation extends Document {
-  _id: mongoose.Types.ObjectId;
   name: string;
-  location: ILocation;
-  chargerModel: string; // เปลี่ยนจาก model เป็น chargerModel (model เป็น reserved word)
+  visible: boolean;      // ← เพิ่มใหม่
+  location: {
+    address: string;
+    latitude: number;
+    longitude: number;
+  };
+  chargerModel: string;
   status: 'Online' | 'Offline';
-  generatorFuelLevel: number; // เปอร์เซ็นต์น้ำมัน (0-100)
+  generatorFuelLevel: number;
   ownerPhone: string;
   chargers: ICharger[];
   createdAt: Date;
   updatedAt: Date;
 }
 
-const chargerSchema = new Schema<ICharger>(
-  {
-    id: {
-      type: String,
-      required: true,
-    },
-    type: {
-      type: String,
-      enum: ['CCS2', 'AC'],
-      required: true,
-    },
-    status: {
-      type: String,
-      enum: ['Available', 'Preparing', 'Charging', 'Offline', 'Faulted'],
-      default: 'Available',
-    },
-    pricePerKwh: {
-      type: Number,
-      required: true,
-      min: 0,
-    },
-    currentUserId: {
-      type: Schema.Types.ObjectId,
-      ref: 'User',
-      default: null,
-    },
+// Charger schema
+const ChargerSchema = new Schema({
+  id: {
+    type: String,
+    required: true,
   },
-  { _id: false }
-);
-
-const locationSchema = new Schema<ILocation>(
-  {
-    address: {
-      type: String,
-      required: true,
-    },
-    latitude: {
-      type: Number,
-      required: true,
-    },
-    longitude: {
-      type: Number,
-      required: true,
-    },
+  type: {
+    type: String,
+    enum: ['CCS2', 'AC'],
+    required: true,
   },
-  { _id: false }
-);
+  status: {
+    type: String,
+    enum: ['Available', 'Preparing', 'Charging', 'Finishing', 'Faulted', 'Offline'],
+    default: 'Available',
+  },
+  pricePerKwh: {
+    type: Number,
+    required: true,
+  },
+  enabled: {
+    type: Boolean,
+    default: true,  // ← default เปิดใช้งาน
+  },
+  connectorId: {
+    type: Number,
+    min: 1,
+    max: 10,  // รองรับได้หลาย connectors
+  },
+});
 
-const stationSchema = new Schema<IStation>(
+// Station schema
+const StationSchema = new Schema(
   {
     name: {
       type: String,
-      required: [true, 'Station name is required'],
+      required: true,
       trim: true,
     },
+    visible: {
+      type: Boolean,
+      default: true,  // ← default แสดงใน map
+    },
     location: {
-      type: locationSchema,
-      required: true,
+      address: {
+        type: String,
+        required: true,
+      },
+      latitude: {
+        type: Number,
+        required: true,
+      },
+      longitude: {
+        type: Number,
+        required: true,
+      },
     },
     chargerModel: {
       type: String,
-      required: true,
-      trim: true,
+      default: '',
     },
     status: {
       type: String,
@@ -101,28 +97,23 @@ const stationSchema = new Schema<IStation>(
     },
     generatorFuelLevel: {
       type: Number,
+      default: 100,
       min: 0,
       max: 100,
-      default: 100,
     },
     ownerPhone: {
       type: String,
-      required: true,
-      trim: true,
+      default: '',
     },
-    chargers: {
-      type: [chargerSchema],
-      default: [],
-    },
+    chargers: [ChargerSchema],
   },
   {
     timestamps: true,
   }
 );
 
-// Index สำหรับ geospatial queries (ถ้าต้องการค้นหาสถานีใกล้เคียง)
-stationSchema.index({ 'location.latitude': 1, 'location.longitude': 1 });
+// Index สำหรับ query ที่เร็วขึ้น
+StationSchema.index({ visible: 1 });
+StationSchema.index({ 'location.latitude': 1, 'location.longitude': 1 });
 
-const Station = mongoose.model<IStation>('Station', stationSchema);
-
-export default Station;
+export default mongoose.model<IStation>('Station', StationSchema);

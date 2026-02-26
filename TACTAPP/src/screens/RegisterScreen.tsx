@@ -9,12 +9,12 @@ import {
   Platform,
   ScrollView,
   ActivityIndicator,
+  Image,
   Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
-import { Header } from '../components/Header';
 
 interface RegisterScreenProps {
   onNavigateBack: () => void;
@@ -27,7 +27,7 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({
 }) => {
   const { t } = useLanguage();
   const { register, isLoading } = useAuth();
-
+  
   const [formData, setFormData] = useState({
     username: '',
     email: '',
@@ -37,15 +37,23 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({
     whatsapp: '',
     line: '',
   });
-  const [agreeTerms, setAgreeTerms] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [agreeTerms, setAgreeTerms] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const validateForm = (): boolean => {
+  const updateField = (field: string, value: string) => {
+    setFormData(prev => ({ ...prev, [field]: value }));
+    // Clear error when user types
+    if (errors[field]) {
+      setErrors(prev => ({ ...prev, [field]: '' }));
+    }
+  };
+
+  const validate = (): boolean => {
     const newErrors: Record<string, string> = {};
 
-    if (!formData.username) {
+    if (!formData.username.trim()) {
       newErrors.username = t('required');
     }
 
@@ -80,11 +88,9 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({
   };
 
   const handleRegister = async () => {
-    if (!validateForm()) {
-      return;
-    }
+    if (!validate()) return;
 
-    const success = await register({
+    const result = await register({
       username: formData.username,
       email: formData.email,
       phone: formData.phone,
@@ -94,33 +100,39 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({
       rememberMe: false,
     });
 
-    if (success) {
-      onRegisterSuccess();
+    if (result.success) {
+      // แสดง Alert แล้วกลับไปหน้า Login
+      Alert.alert(
+        t('success'),
+        t('registerSuccess'),
+        [
+          {
+            text: t('login'),
+            onPress: () => onNavigateBack(), // กลับไปหน้า Login
+          },
+        ],
+        { cancelable: false }
+      );
     } else {
-      Alert.alert('Error', 'Registration failed. Please try again.');
-    }
-  };
-
-  const updateField = (field: string, value: string) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
-    if (errors[field]) {
-      setErrors(prev => ({ ...prev, [field]: '' }));
+      // แสดง error
+      Alert.alert(t('error'), result.message || t('registerFailed'));
     }
   };
 
   const renderInput = (
     field: string,
+    label: string,
     placeholder: string,
     options?: {
+      keyboardType?: 'default' | 'email-address' | 'phone-pad';
       secureTextEntry?: boolean;
       showToggle?: boolean;
       isVisible?: boolean;
       onToggle?: () => void;
-      keyboardType?: 'default' | 'email-address' | 'phone-pad';
     }
   ) => (
     <View className="mb-4">
-      <Text className="text-gray-600 mb-2">{placeholder}</Text>
+      <Text className="text-gray-600 mb-2">{label}</Text>
       <View className="relative">
         <TextInput
           className={`border rounded-lg px-4 py-3 text-base bg-white ${
@@ -130,8 +142,8 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({
           placeholderTextColor="#9ca3af"
           value={formData[field as keyof typeof formData]}
           onChangeText={(value) => updateField(field, value)}
-          secureTextEntry={options?.secureTextEntry && !options?.isVisible}
           keyboardType={options?.keyboardType || 'default'}
+          secureTextEntry={options?.secureTextEntry && !options?.isVisible}
           autoCapitalize={field === 'email' ? 'none' : 'sentences'}
         />
         {options?.showToggle && (
@@ -158,39 +170,46 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       className="flex-1 bg-white"
     >
-      {/* Header with Logo */}
-      <Header showClose onClose={onNavigateBack} />
-
       <ScrollView
         contentContainerStyle={{ flexGrow: 1 }}
         keyboardShouldPersistTaps="handled"
       >
-        {/* Title */}
-        <View className="px-6 mb-4">
-          <Text className="text-2xl font-bold text-gray-800">{t('register')}</Text>
+        {/* Header */}
+        <View className="flex-row justify-between items-center p-4 pt-12">
+          <TouchableOpacity onPress={onNavigateBack}>
+            <Ionicons name="close" size={28} color="#333" />
+          </TouchableOpacity>
+          <Image
+            source={require('../../assets/images/LOGOblack.png')}
+            style={{ width: 100, height: 25 }}
+            resizeMode="contain"
+          />
+          <View style={{ width: 28 }} />
         </View>
 
-        {/* Register Form */}
-        <View className="px-6">
-          {renderInput('username', t('username'))}
-          {renderInput('email', t('email'), { keyboardType: 'email-address' })}
-          {renderInput('phone', t('phone'), { keyboardType: 'phone-pad' })}
-          {renderInput('password', t('password'), {
+        {/* Form */}
+        <View className="flex-1 px-6 pt-4">
+          <Text className="text-2xl font-bold text-gray-800 mb-6">{t('register')}</Text>
+
+          {renderInput('username', t('username'), t('username'))}
+          {renderInput('email', t('email'), t('email'), { keyboardType: 'email-address' })}
+          {renderInput('phone', t('phone'), t('phone'), { keyboardType: 'phone-pad' })}
+          {renderInput('password', t('password'), t('password'), {
             secureTextEntry: true,
             showToggle: true,
             isVisible: showPassword,
             onToggle: () => setShowPassword(!showPassword),
           })}
-          {renderInput('confirmPassword', t('confirmPassword'), {
+          {renderInput('confirmPassword', t('confirmPassword'), t('confirmPassword'), {
             secureTextEntry: true,
             showToggle: true,
             isVisible: showConfirmPassword,
             onToggle: () => setShowConfirmPassword(!showConfirmPassword),
           })}
-          {renderInput('whatsapp', t('whatsapp'))}
-          {renderInput('line', t('line'))}
+          {renderInput('whatsapp', t('whatsapp'), t('whatsapp'))}
+          {renderInput('line', t('line'), t('line'))}
 
-          {/* Terms & Conditions */}
+          {/* Terms Checkbox */}
           <TouchableOpacity
             className="flex-row items-start mb-6"
             onPress={() => setAgreeTerms(!agreeTerms)}
@@ -212,7 +231,7 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({
 
           {/* Register Button */}
           <TouchableOpacity
-            className={`rounded-lg py-4 items-center mb-8 ${
+            className={`rounded-lg py-4 items-center mb-6 ${
               isLoading ? 'bg-gray-400' : 'bg-green-500'
             }`}
             onPress={handleRegister}
