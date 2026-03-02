@@ -171,8 +171,9 @@ export const RegisterScreen: React.FC<RegisterScreenProps> = ({
       className="flex-1 bg-white"
     >
       <ScrollView
-        contentContainerStyle={{ flexGrow: 1 }}
+        contentContainerStyle={{ flexGrow: 1 , paddingBottom: 100}}
         keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
       >
         {/* Header */}
         <View className="flex-row justify-between items-center p-4 pt-12">

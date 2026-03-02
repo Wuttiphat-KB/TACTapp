@@ -1,3 +1,4 @@
+//C:\Users\Asus\Documents\TACT\TACTAPP\src\screens\MainScreen.tsx
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View,

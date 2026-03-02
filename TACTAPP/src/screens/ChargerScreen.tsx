@@ -96,7 +96,7 @@ export const ChargerScreen: React.FC<ChargerScreenProps> = ({
   const isChargerSelectable = (charger: Charger) => {
     if (isChargerDisabled(charger)) return false;
     if (isMyCharging(charger)) return true;
-    if (charger.status === 'Available' || charger.status === 'Preparing') return true;
+    if (charger.status === 'Preparing') return true;
     return false;
   };
 

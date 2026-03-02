@@ -9,7 +9,7 @@
 const DEV_MODE = true;
 
 // ⬇️ เปลี่ยนตรงนี้เป็น IP เครื่องคุณ
-const LOCAL_IP = '192.168.70.37';  // ← เปลี่ยนเป็น IP นี้
+const LOCAL_IP = '212.80.215.42';  // ← เปลี่ยนเป็น IP นี้
 
 export const API_BASE_URL = DEV_MODE
   ? `http://${LOCAL_IP}:5000/api`
