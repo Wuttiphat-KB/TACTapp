@@ -23,12 +23,22 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
 
     // ===== ดึง status จาก CSMS =====
     let csmsStatus: { [connectorId: string]: string } = {};
+    let isChargePointConnected = false;  // ← NEW: เช็คว่า CP connected มั้ย
+    
     try {
       const chargePoints = await getChargePoints();
       const cp = chargePoints.find(c => c.id === (process.env.CSMS_CP_ID || 'TACT30KW'));
-      if (cp && cp.status) {
-        csmsStatus = cp.status;
-        console.log(`⚡ CSMS connector status:`, csmsStatus);
+      
+      if (cp) {
+        isChargePointConnected = cp.connected === true;  // ← เช็คจาก CSMS
+        console.log(`⚡ ChargePoint ${cp.id} connected: ${isChargePointConnected}`);
+        
+        if (cp.status) {
+          csmsStatus = cp.status;
+          console.log(`⚡ CSMS connector status:`, csmsStatus);
+        }
+      } else {
+        console.log(`⚠️ ChargePoint not found in CSMS`);
       }
     } catch (err) {
       console.warn('⚠️ Could not fetch CSMS status:', err);
@@ -38,6 +48,11 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
     // Merge CSMS status (ส่ง chargers ทั้งหมด รวม enabled=false)
     const stationsWithStatus = stations.map(station => {
       const stationObj = station.toObject();
+      
+      // ===== อัพเดท Station status จาก CSMS =====
+      // ถ้า CSMS บอกว่า connected → Online, ไม่งั้น → Offline
+      stationObj.status = isChargePointConnected ? 'Online' : 'Offline';
+      // ============================================
       
       // อัพเดท chargers status จาก CSMS (ไม่ filter enabled ออก)
       const updatedChargers = stationObj.chargers.map((charger: any) => {
@@ -49,6 +64,15 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
             ...charger,
             enabled: false,
             status: 'Disabled',  // แสดงเป็น Disabled ใน App
+          };
+        }
+        
+        // ถ้า ChargePoint ไม่ connected → charger ก็ Offline ด้วย
+        if (!isChargePointConnected) {
+          return {
+            ...charger,
+            enabled: true,
+            status: 'Offline',
           };
         }
         
@@ -126,16 +150,26 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
 
     // ===== ดึง status จาก CSMS =====
     let csmsStatus: { [connectorId: string]: string } = {};
+    let isChargePointConnected = false;  // ← NEW
+    
     try {
       const chargePoints = await getChargePoints();
       const cp = chargePoints.find(c => c.id === (process.env.CSMS_CP_ID || 'TACT30KW'));
-      if (cp && cp.status) {
-        csmsStatus = cp.status;
+      
+      if (cp) {
+        isChargePointConnected = cp.connected === true;
+        if (cp.status) {
+          csmsStatus = cp.status;
+        }
       }
     } catch (err) {
       // ใช้ status จาก DB แทน
     }
     // ================================
+
+    // ===== อัพเดท Station status =====
+    stationObj.status = isChargePointConnected ? 'Online' : 'Offline';
+    // ==================================
 
     // อัพเดท chargers status จาก CSMS (ส่งทั้งหมด รวม enabled=false)
     const updatedChargers = stationObj.chargers.map((charger: any) => {
@@ -147,6 +181,15 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
           ...charger,
           enabled: false,
           status: 'Disabled',
+        };
+      }
+      
+      // ถ้า ChargePoint ไม่ connected → charger ก็ Offline
+      if (!isChargePointConnected) {
+        return {
+          ...charger,
+          enabled: true,
+          status: 'Offline',
         };
       }
       
@@ -423,11 +466,16 @@ router.post('/refresh', async (req: Request, res: Response): Promise<void> => {
 
     // ดึง status จาก CSMS
     let csmsStatus: { [connectorId: string]: string } = {};
+    let isChargePointConnected = false;
+    
     try {
       const chargePoints = await getChargePoints();
       const cp = chargePoints.find(c => c.id === (process.env.CSMS_CP_ID || 'TACT30KW'));
-      if (cp && cp.status) {
-        csmsStatus = cp.status;
+      if (cp) {
+        isChargePointConnected = cp.connected === true;
+        if (cp.status) {
+          csmsStatus = cp.status;
+        }
       }
     } catch (err) {
       // fallback
@@ -437,6 +485,9 @@ router.post('/refresh', async (req: Request, res: Response): Promise<void> => {
     const stationsWithStatus = stations.map(station => {
       const stationObj = station.toObject();
       
+      // อัพเดท Station status
+      stationObj.status = isChargePointConnected ? 'Online' : 'Offline';
+      
       const updatedChargers = stationObj.chargers.map((charger: any) => {
         const isEnabled = charger.enabled !== false;
         
@@ -445,6 +496,14 @@ router.post('/refresh', async (req: Request, res: Response): Promise<void> => {
             ...charger,
             enabled: false,
             status: 'Disabled',
+          };
+        }
+        
+        if (!isChargePointConnected) {
+          return {
+            ...charger,
+            enabled: true,
+            status: 'Offline',
           };
         }
         
