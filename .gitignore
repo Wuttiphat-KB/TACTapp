@@ -31,3 +31,7 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# EdgeBox / OCPP client — รันบน Raspberry Pi (deploy ด้วยการ copy ไป Pi ไม่ผ่าน repo นี้)
+# มี secret (Telegram token ใน CP.py, iMPS Mongo creds ใน plc_function.py.bak) → ห้าม commit
+OCPP_TACT/

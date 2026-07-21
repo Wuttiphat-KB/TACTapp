@@ -3,6 +3,7 @@ import { Router, Request, Response } from 'express';
 import Station from '../models/Station';
 import { authenticate, authorize } from '../middleware/auth';
 import { getChargePoints, triggerStatusNotification, triggerAllConnectorStatus } from '../services/ocppBridge';
+import { withGeneratorFreshness } from '../services/generatorState';
 
 const router = Router();
 
@@ -114,7 +115,8 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
       });
       
       stationObj.chargers = updatedChargers;
-      return stationObj;
+      // ผสมค่า generator ที่สดที่สุด + คิด staleness (deployment นี้มี gen ตัวเดียว)
+      return withGeneratorFreshness(stationObj);
     });
 
     res.json({
@@ -229,6 +231,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
     });
 
     stationObj.chargers = updatedChargers;
+    withGeneratorFreshness(stationObj);
 
     res.json({
       success: true,

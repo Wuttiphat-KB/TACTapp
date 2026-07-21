@@ -23,6 +23,17 @@ export interface IStation extends Document {
   chargerModel: string;
   status: 'Online' | 'Offline';
   generatorFuelLevel: number;
+  cpId?: string;                 // ← OCPP charge point id (default 'TACT30KW') สำหรับ map generator telemetry
+  generator?: {                  // ← ค่า live ล่าสุดจาก DSE4620 (ผ่าน gen_telemetry.py → /api/telemetry/generator)
+    status: 'Running' | 'Stopped' | 'Unknown';
+    fuelLevel: number | null;
+    frequency: number | null;
+    rpm: number | null;
+    batteryVoltage: number | null;
+    coolantTemp: number | null;
+    voltageL1N: number | null;
+    updatedAt: Date | null;
+  };
   ownerPhone: string;
   chargers: ICharger[];
   createdAt: Date;
@@ -100,6 +111,25 @@ const StationSchema = new Schema(
       default: 100,
       min: 0,
       max: 100,
+    },
+    cpId: {
+      type: String,
+      default: 'TACT30KW',
+    },
+    // ค่า live ของ generator (เขียนโดย generatorState service). null = ยังไม่เคยได้รับค่า
+    generator: {
+      status: {
+        type: String,
+        enum: ['Running', 'Stopped', 'Unknown'],
+        default: 'Unknown',
+      },
+      fuelLevel: { type: Number, default: null },
+      frequency: { type: Number, default: null },
+      rpm: { type: Number, default: null },
+      batteryVoltage: { type: Number, default: null },
+      coolantTemp: { type: Number, default: null },
+      voltageL1N: { type: Number, default: null },
+      updatedAt: { type: Date, default: null },
     },
     ownerPhone: {
       type: String,

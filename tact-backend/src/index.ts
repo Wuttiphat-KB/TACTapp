@@ -5,8 +5,9 @@ import { Server as SocketIOServer } from 'socket.io';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import connectDB from './config/database';
-import { authRoutes, stationRoutes, chargingRoutes } from './routes';
+import { authRoutes, stationRoutes, chargingRoutes, telemetryRoutes } from './routes';
 import { initCSMSListener } from './services/csmsListener';
+import { initGeneratorState } from './services/generatorState';
 
 // Load environment variables
 dotenv.config();
@@ -48,6 +49,7 @@ if (process.env.NODE_ENV === 'development') {
 app.use('/api/auth', authRoutes);
 app.use('/api/stations', stationRoutes);
 app.use('/api/charging', chargingRoutes);
+app.use('/api/telemetry', telemetryRoutes);
 
 // Health check
 app.get('/api/health', (req: Request, res: Response) => {
@@ -117,6 +119,9 @@ export { io };
 
 // ========== Initialize CSMS Listener ==========
 initCSMSListener(io);
+
+// ========== Initialize Generator telemetry (staleness watchdog + socket) ==========
+initGeneratorState(io);
 
 // 404 handler
 app.use((req: Request, res: Response) => {

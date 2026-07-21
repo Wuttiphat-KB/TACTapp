@@ -84,6 +84,10 @@ router.post(
       const pricePerKwh = charger?.pricePerKwh || 7.5;
       const chargerType = charger?.type || 'CCS2';
 
+      // AC ไม่มีสาย CP → ไม่มี Preparing/StartTransaction lifecycle
+      // gen ติด = ไฟเข้าเต้า AC ทันที → treat เป็น 'Charging' เลย (optimistic)
+      const initialState: 'Preparing' | 'Charging' = chargerType === 'AC' ? 'Charging' : 'Preparing';
+
       // สร้าง idTag จาก userId
       const idTag = generateIdTag(userId);
       
@@ -101,19 +105,22 @@ router.post(
         return;
       }
 
-      // สั่ง RemoteStart
+      // สั่ง RemoteStart (DC ต้อง Accepted / AC best-effort — gen ติดผ่าน Start_Gen เมื่อ deploy บน server)
       const startResult = await remoteStart(connectorId, idTag);
+      const startAccepted = startResult.success && startResult.result?.status === 'Accepted';
 
-      if (!startResult.success || startResult.result?.status !== 'Accepted') {
-        // ลบ RFID ถ้า start ไม่สำเร็จ
+      if (!startAccepted && chargerType !== 'AC') {
+        // DC: charger ไม่รับ → ยกเลิก
         unregisterIdTag(idTag);
-        
         res.status(400).json({
           success: false,
           message: 'Charger rejected the start command',
           error: startResult.error || startResult.result?.status,
         });
         return;
+      }
+      if (!startAccepted) {
+        console.warn(`[Charging] AC start: RemoteStart ไม่ผ่าน (${startResult.error || startResult.result?.status}) — สร้าง session ต่อแบบ best-effort`);
       }
 
       // สร้าง ChargingSession (state: "Preparing")
@@ -125,7 +132,7 @@ router.post(
         cpId: process.env.CSMS_CP_ID || 'TACT30KW',
         connectorId,
         idTag,
-        state: 'Preparing',
+        state: initialState,
         status: 'Active',
         pricePerKwh,
         startTime: new Date(),
@@ -133,7 +140,7 @@ router.post(
 
       // อัพเดทสถานะ charger ใน Station
       if (charger) {
-        charger.status = 'Preparing';
+        charger.status = initialState;
         await station.save();
       }
 
@@ -146,7 +153,7 @@ router.post(
           session: {
             _id: session._id,
             sessionId: session.sessionId,
-            state: 'Preparing',
+            state: initialState,
             connectorId,
             pricePerKwh,
           },
@@ -195,6 +202,29 @@ router.post(
         res.status(403).json({
           success: false,
           message: 'Not authorized to stop this session',
+        });
+        return;
+      }
+
+      // AC: ไม่มี OCPP transaction (ไม่มีสาย CP) → finalize ตรง ๆ + สั่งดับ gen best-effort
+      if (session.chargerType === 'AC') {
+        session.state = 'Stopped';
+        session.status = 'Inactive';
+        session.endTime = new Date();
+        await session.save();
+        unregisterIdTag(session.idTag);
+
+        // TODO(AC): สั่ง Stop_Gen ให้ถึง CP.py จริง ยังรอ 2 อย่าง:
+        //   (1) ทีม PLC เพิ่ม tag Stop_Gen ฝั่ง PLC
+        //   (2) connector/transaction path ของ AC (OPEN_QUESTIONS #14)
+        // ถ้าเผื่ออนาคต AC มี transactionId ค่อยยิง remoteStop (→ CP.py จะ write_stop_gen)
+        if (session.transactionId) {
+          try { await remoteStop(session.transactionId); } catch (e) { /* best-effort */ }
+        }
+
+        res.json({
+          success: true,
+          message: 'AC session stopped (generator stop pending PLC Stop_Gen tag)',
         });
         return;
       }
