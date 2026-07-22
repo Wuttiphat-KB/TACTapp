@@ -1,4 +1,5 @@
 // C:\Users\Asus\Documents\TACT\TACTAPP\src\screens\ChargingScreen.tsx
+
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
@@ -43,7 +44,7 @@ export const ChargingScreen: React.FC<ChargingScreenProps> = ({
   isWaitingUnplug = false,
 }) => {
   const { t, language } = useLanguage();
-  
+
   // ========== Smooth Timer ==========
   const [displayTime, setDisplayTime] = useState(session.chargingTime);
   const lastServerTimeRef = useRef(session.chargingTime);
@@ -105,8 +106,14 @@ export const ChargingScreen: React.FC<ChargingScreenProps> = ({
     );
   };
 
-  const generatorCapacity = 30;
-  const remainingKwh = (station.generatorFuelLevel / 100) * generatorCapacity;
+  // ค่า generator จริงจาก backend telemetry (null/stale → ไม่ทราบสถานะ)
+  const gen = station.generator;
+  const genStatus = gen && !gen.stale ? gen.status : 'Unknown';
+  const genFuel = gen?.fuelLevel ?? null;
+  const genStatusLabel =
+    genStatus === 'Running' ? t('genRunning') : genStatus === 'Stopped' ? t('genStopped') : t('genUnknown');
+  const genStatusColor =
+    genStatus === 'Running' ? 'text-green-500' : genStatus === 'Stopped' ? 'text-gray-500' : 'text-red-500';
 
   return (
     <View className="flex-1 bg-white">
@@ -125,7 +132,7 @@ export const ChargingScreen: React.FC<ChargingScreenProps> = ({
               <Text className="text-xl font-bold text-gray-800">{station.name}</Text>
               <Text className="text-gray-500">{station.model}</Text>
               <Text className="text-green-500 font-medium">{t('charging')}</Text>
-              
+
               <View className="bg-blue-100 px-3 py-1 rounded-full self-start mt-2">
                 <Text className="text-blue-600 font-medium">{chargerTypeLabel}</Text>
               </View>
@@ -137,7 +144,7 @@ export const ChargingScreen: React.FC<ChargingScreenProps> = ({
         <View className="flex-row flex-wrap justify-around px-4 py-6 mx-4">
           <View className="items-center w-1/2 mb-4">
             <Text className="text-3xl font-bold text-gray-800">
-              {session.powerKw.toFixed(0)} kWh
+              {session.powerKw.toFixed(1)} kW
             </Text>
             <Text className="text-gray-500">{t('power')}</Text>
           </View>
@@ -168,15 +175,22 @@ export const ChargingScreen: React.FC<ChargingScreenProps> = ({
 
         {/* Generator Section */}
         <View className="px-4 py-4">
-          <View>
+          <View className="flex-row justify-between items-center">
             <Text className="text-lg font-semibold text-gray-800">{t('generator')}</Text>
-            <Text className="text-green-500 font-medium">{t('active')}</Text>
+            <Text className={`font-medium ${genStatusColor}`}>{genStatusLabel}</Text>
           </View>
-          
+
           <View className="flex-row justify-between items-center mt-3">
-            <Text className="text-gray-600">{t('capacity')}</Text>
-            <Text className="font-semibold">{remainingKwh.toFixed(0)} kWh</Text>
+            <Text className="text-gray-600">{t('fuel')}</Text>
+            <Text className="font-semibold">{genFuel != null ? `${genFuel.toFixed(0)}%` : '—'}</Text>
           </View>
+
+          {genStatus === 'Running' && gen?.frequency != null && (
+            <View className="flex-row justify-between items-center mt-2">
+              <Text className="text-gray-600">{t('frequency')}</Text>
+              <Text className="font-semibold">{gen.frequency.toFixed(1)} Hz</Text>
+            </View>
+          )}
         </View>
 
         <View className="h-px bg-gray-200 mx-4" />
@@ -195,9 +209,8 @@ export const ChargingScreen: React.FC<ChargingScreenProps> = ({
       {/* Stop Button */}
       <View className="p-4 border-t border-gray-100">
         <TouchableOpacity
-          className={`rounded-lg py-4 items-center ${
-            isLoading || isWaitingUnplug ? 'bg-red-300' : 'bg-red-500'
-          }`}
+          className={`rounded-lg py-4 items-center ${isLoading || isWaitingUnplug ? 'bg-red-300' : 'bg-red-500'
+            }`}
           onPress={handleStopCharging}
           disabled={isLoading || isWaitingUnplug}
         >

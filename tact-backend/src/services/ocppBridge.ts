@@ -1,7 +1,7 @@
 // C:\Users\Asus\Documents\TACT\tact-backend\src\services\ocppBridge.ts
-import axios from 'axios';
+import { csmsAxios } from './csmsAuth';
 
-const CSMS_URL = process.env.CSMS_HTTP_URL || 'http://212.80.215.42:8080';
+const CSMS_URL = process.env.CSMS_HTTP_URL || 'http://127.0.0.1:8080';
 const CP_ID = process.env.CSMS_CP_ID || 'TACT30KW';
 
 interface CommandResponse {
@@ -32,7 +32,7 @@ export async function addRfidCard(
   try {
     console.log(`[OCPP] Adding RFID card: ${idTag}`);
     
-    const response = await axios.post(`${CSMS_URL}/api/rfid/add`, {
+    const response = await csmsAxios.post(`${CSMS_URL}/api/rfid/add`, {
       id_tag: idTag.toUpperCase(),
       status: 'Accepted',
       description: description || `App user: ${idTag}`,
@@ -53,7 +53,7 @@ export async function removeRfidCard(
   idTag: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const response = await axios.post(`${CSMS_URL}/api/rfid/delete`, {
+    const response = await csmsAxios.post(`${CSMS_URL}/api/rfid/delete`, {
       id_tag: idTag.toUpperCase(),
     });
 
@@ -74,7 +74,7 @@ export async function remoteStart(
   try {
     console.log(`[OCPP] RemoteStart: connector=${connectorId}, idTag=${idTag}`);
     
-    const response = await axios.post(`${CSMS_URL}/api/command`, {
+    const response = await csmsAxios.post(`${CSMS_URL}/api/command`, {
       cp_id: CP_ID,
       command: 'remote_start',
       params: {
@@ -102,7 +102,7 @@ export async function remoteStop(transactionId: number): Promise<CommandResponse
   try {
     console.log(`[OCPP] RemoteStop: transactionId=${transactionId}`);
     
-    const response = await axios.post(`${CSMS_URL}/api/command`, {
+    const response = await csmsAxios.post(`${CSMS_URL}/api/command`, {
       cp_id: CP_ID,
       command: 'remote_stop',
       params: {
@@ -127,7 +127,7 @@ export async function remoteStop(transactionId: number): Promise<CommandResponse
  */
 export async function getChargePoints(): Promise<ChargePointStatus[]> {
   try {
-    const response = await axios.get(`${CSMS_URL}/api/charge_points`);
+    const response = await csmsAxios.get(`${CSMS_URL}/api/charge_points`);
     return response.data || [];
   } catch (error: any) {
     console.error('[OCPP] GetChargePoints error:', error.message);
@@ -161,7 +161,7 @@ export async function getConnectorStatus(
  */
 export async function resetCharger(type: 'Soft' | 'Hard' = 'Soft'): Promise<CommandResponse> {
   try {
-    const response = await axios.post(`${CSMS_URL}/api/command`, {
+    const response = await csmsAxios.post(`${CSMS_URL}/api/command`, {
       cp_id: CP_ID,
       command: 'reset',
       params: { type },
@@ -182,7 +182,7 @@ export async function resetCharger(type: 'Soft' | 'Hard' = 'Soft'): Promise<Comm
  */
 export async function unlockConnector(connectorId: number): Promise<CommandResponse> {
   try {
-    const response = await axios.post(`${CSMS_URL}/api/command`, {
+    const response = await csmsAxios.post(`${CSMS_URL}/api/command`, {
       cp_id: CP_ID,
       command: 'unlock',
       params: { connector_id: connectorId },
@@ -225,7 +225,7 @@ export async function triggerMessage(
       params.connector_id = connectorId;
     }
     
-    const response = await axios.post(`${CSMS_URL}/api/command`, {
+    const response = await csmsAxios.post(`${CSMS_URL}/api/command`, {
       cp_id: CP_ID,
       command: 'trigger',
       params,

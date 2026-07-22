@@ -3,7 +3,7 @@
  * แปลงข้อมูลจาก Backend (MongoDB) ให้ตรงกับ Frontend types
  */
 
-import { Station, Charger } from '../types';
+import { Station, Charger, GeneratorLive } from '../types';
 
 // Backend Station Response
 interface BackendStation {
@@ -17,6 +17,7 @@ interface BackendStation {
   chargerModel: string;
   status: 'Online' | 'Offline';
   generatorFuelLevel: number;
+  generator?: GeneratorLive | null;
   ownerPhone: string;
   chargers: BackendCharger[];
 }
@@ -39,6 +40,7 @@ export const mapStation = (backend: BackendStation): Station => ({
   model: backend.chargerModel,
   status: backend.status,
   generatorFuelLevel: backend.generatorFuelLevel,
+  generator: backend.generator ?? null,
   ownerPhone: backend.ownerPhone,
   chargers: backend.chargers.map(c => mapCharger(c, backend._id)),
 });

@@ -27,9 +27,23 @@ export interface Station {
   model: string;
   chargerModel?: string;
   status: 'Online' | 'Offline';
-  generatorFuelLevel: number; // ปริมาณน้ำมันในเครื่อง Generator
+  generatorFuelLevel: number; // (legacy) ปริมาณน้ำมัน — ใช้ generator.fuelLevel แทน
+  generator?: GeneratorLive | null; // ค่า live จาก DSE4620 (ผ่าน backend telemetry)
   chargers: Charger[];
   ownerPhone: string;
+}
+
+// ค่า live ของ generator ที่ได้จาก backend (REST station หรือ socket 'generatorUpdate')
+export interface GeneratorLive {
+  status: 'Running' | 'Stopped' | 'Unknown';
+  fuelLevel: number | null;      // %
+  frequency: number | null;      // Hz
+  rpm: number | null;
+  batteryVoltage: number | null; // V
+  coolantTemp: number | null;    // °C
+  voltageL1N: number | null;     // V
+  updatedAt: string;
+  stale: boolean;                // true = ค่าเก่าเกิน threshold (EdgeBox/poller เงียบ)
 }
 
 // Charger Types

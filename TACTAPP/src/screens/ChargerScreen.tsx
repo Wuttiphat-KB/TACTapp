@@ -97,6 +97,8 @@ export const ChargerScreen: React.FC<ChargerScreenProps> = ({
     if (isChargerDisabled(charger)) return false;
     if (isMyCharging(charger)) return true;
     if (charger.status === 'Preparing') return true;
+    // AC ไม่มีสาย CP → ไม่มี Preparing → กดได้ตั้งแต่ Available (start = สั่งติด gen)
+    if (charger.type === 'AC' && charger.status === 'Available') return true;
     return false;
   };
 
@@ -137,8 +139,14 @@ export const ChargerScreen: React.FC<ChargerScreenProps> = ({
     return type === 'CCS2' ? mdiEvPlugCcs2 : mdiPowerPlug;
   };
 
-  const generatorCapacity = 30;
-  const remainingKwh = (station.generatorFuelLevel / 100) * generatorCapacity;
+  // ค่า generator จริงจาก backend telemetry (null/stale → ไม่ทราบสถานะ)
+  const gen = station.generator;
+  const genStatus = gen && !gen.stale ? gen.status : 'Unknown';
+  const genFuel = gen?.fuelLevel ?? null;
+  const genStatusLabel =
+    genStatus === 'Running' ? t('genRunning') : genStatus === 'Stopped' ? t('genStopped') : t('genUnknown');
+  const genStatusColor =
+    genStatus === 'Running' ? 'text-green-500' : genStatus === 'Stopped' ? 'text-gray-500' : 'text-red-500';
 
   return (
     <View className="flex-1 bg-white">
@@ -185,17 +193,22 @@ export const ChargerScreen: React.FC<ChargerScreenProps> = ({
 
         {/* Generator Section */}
         <View className="px-4 py-4">
-          <View>
+          <View className="flex-row justify-between items-center">
             <Text className="text-lg font-semibold text-gray-800">{t('generator')}</Text>
-            <Text className={`font-medium ${getStatusColor(station.generatorFuelLevel > 20 ? 'Active' : 'Inactive')}`}>
-              {station.generatorFuelLevel > 20 ? t('active') : t('inactive')}
-            </Text>
+            <Text className={`font-medium ${genStatusColor}`}>{genStatusLabel}</Text>
           </View>
-          
+
           <View className="flex-row justify-between items-center mt-3">
-            <Text className="text-gray-600">{t('capacity')}</Text>
-            <Text className="font-semibold">{remainingKwh.toFixed(0)} kWh</Text>
+            <Text className="text-gray-600">{t('fuel')}</Text>
+            <Text className="font-semibold">{genFuel != null ? `${genFuel.toFixed(0)}%` : '—'}</Text>
           </View>
+
+          {genStatus === 'Running' && gen?.frequency != null && (
+            <View className="flex-row justify-between items-center mt-2">
+              <Text className="text-gray-600">{t('frequency')}</Text>
+              <Text className="font-semibold">{gen.frequency.toFixed(1)} Hz</Text>
+            </View>
+          )}
         </View>
 
         <View className="h-px bg-gray-200 mx-4" />

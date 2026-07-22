@@ -49,6 +49,21 @@ interface ConnectorStatusData {
   errorCode?: string;
 }
 
+interface GeneratorUpdateData {
+  cpId: string;
+  generator: {
+    status: 'Running' | 'Stopped' | 'Unknown';
+    fuelLevel: number | null;
+    frequency: number | null;
+    rpm: number | null;
+    batteryVoltage: number | null;
+    coolantTemp: number | null;
+    voltageL1N: number | null;
+    updatedAt: string;
+    stale: boolean;
+  };
+}
+
 type EventCallback<T> = (data: T) => void;
 
 /**
@@ -169,9 +184,19 @@ export function onChargingFaulted(callback: EventCallback<ChargingFaultedData>):
  */
 export function onConnectorStatus(callback: EventCallback<ConnectorStatusData>): () => void {
   if (!socket) return () => {};
-  
+
   socket.on('connectorStatus', callback);
   return () => socket?.off('connectorStatus', callback);
+}
+
+/**
+ * Listen for generator telemetry updates (station-scoped, broadcast)
+ */
+export function onGeneratorUpdate(callback: EventCallback<GeneratorUpdateData>): () => void {
+  if (!socket) return () => {};
+
+  socket.on('generatorUpdate', callback);
+  return () => socket?.off('generatorUpdate', callback);
 }
 
 /**
@@ -204,5 +229,6 @@ export default {
   onChargingStopped,
   onChargingFaulted,
   onConnectorStatus,
+  onGeneratorUpdate,
   pingServer,
 };

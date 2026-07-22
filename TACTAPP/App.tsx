@@ -30,6 +30,7 @@ import {
   onChargingStopped,
   onChargingFaulted,
   onConnectorStatus,
+  onGeneratorUpdate,
 } from './src/services/socket';
 
 import './global.css';
@@ -293,6 +294,12 @@ const AppContent: React.FC = () => {
         return { ...prev, chargers: updatedChargers };
       });
     });
+
+    // อัพเดทค่า generator (station-scoped, broadcast จาก backend telemetry)
+    onGeneratorUpdate((data) => {
+      // deployment นี้มี station เดียว → อัพเดท selectedStation ที่แสดงอยู่
+      setSelectedStation(prev => (prev ? { ...prev, generator: data.generator } : prev));
+    });
   };
 
   // ========== Trigger Fault (manual) ==========
@@ -445,7 +452,8 @@ const AppContent: React.FC = () => {
           stationId: stationId,
           userId: user?.id || '',
           soc: isDC ? 0 : null,
-          state: 'Preparing',  // ← รอ chargingStarted event จาก Socket
+          // DC: รอ chargingStarted จาก Socket / AC: ไม่มี lifecycle → Charging เลย (gen ติด = ไฟเข้า AC)
+          state: isDC ? 'Preparing' : 'Charging',
           powerKw: 0,
           chargingTime: 0,
           energyCharged: 0,
@@ -494,12 +502,21 @@ const AppContent: React.FC = () => {
       const response = await apiClient.stopCharging(session.id);
 
       if (response.success) {
+        // AC ไม่มี chargingStopped event (ไม่มีสาย CP) → finalize เอง ไม่ต้องรอถอดสาย
+        if (selectedCharger?.type === 'AC') {
+          console.log('[API] AC stop — finalizing locally');
+          setCurrentSession(prev => (prev ? { ...prev, state: 'Stopped', endTime: new Date() } : prev));
+          setIsCharging(false);
+          isStoppingRef.current = false;
+          setIsStoppingCharge(false);
+          setCurrentScreen('Finishing');
+          return;
+        }
         console.log('[API] Stop command sent, waiting for charger...');
-        // แสดง Modal "กรุณาถอดสาย"
+        // DC: แสดง Modal "กรุณาถอดสาย" รอ chargingStopped จาก Socket
         setIsWaitingUnplug(true);
         isStoppingRef.current = false;
         setIsStoppingCharge(false);
-        // Note: session จะถูก update เมื่อได้ chargingStopped event จาก Socket
       } else {
         console.warn('[API] Stop response:', response.message);
         isStoppingRef.current = false;
@@ -512,7 +529,7 @@ const AppContent: React.FC = () => {
       isStoppingRef.current = false;
       setIsStoppingCharge(false);
     }
-  }, [isWaitingUnplug]);
+  }, [isWaitingUnplug, selectedCharger]);
 
   const handleGoToCharging = useCallback(() => {
     setCurrentScreen('Charging');

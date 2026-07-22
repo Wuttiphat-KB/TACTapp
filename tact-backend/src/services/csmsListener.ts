@@ -4,8 +4,9 @@ import { Server as SocketIOServer } from 'socket.io';
 import ChargingSession from '../models/ChargingSession';
 import Station from '../models/Station';
 import { triggerAllConnectorStatus } from './ocppBridge';
+import { getCsmsCookie, clearCsmsCookie } from './csmsAuth';
 
-const CSMS_WS = process.env.CSMS_WS_URL || 'ws://212.80.215.42:8080/ws';
+const CSMS_WS = process.env.CSMS_WS_URL || 'ws://127.0.0.1:8080/ws';
 
 // Mapping: idTag → userId (เก็บตอน start charging)
 export const idTagToUser = new Map<string, string>();
@@ -42,10 +43,36 @@ export function initCSMSListener(io: SocketIOServer): void {
   let reconnectAttempts = 0;
   const maxReconnectAttempts = 10;
 
-  function connect() {
+  function scheduleReconnect() {
+    if (reconnectAttempts < maxReconnectAttempts) {
+      reconnectAttempts++;
+      const delay = Math.min(5000 * reconnectAttempts, 30000);
+      console.log(`[CSMS] Reconnecting in ${delay / 1000}s... (attempt ${reconnectAttempts})`);
+      setTimeout(connect, delay);
+    } else {
+      console.error('[CSMS] Max reconnect attempts reached');
+    }
+  }
+
+  async function connect() {
+    // CSMS ต้อง login ก่อน (cookie-session) → แนบ cookie ใน WS handshake
+    let cookie: string;
+    try {
+      cookie = await getCsmsCookie();
+    } catch (e: any) {
+      console.error(`[CSMS] login ล้มเหลว: ${e.message}`);
+      // creds ผิด/โดนล็อก/ยังไม่ตั้ง → หยุด retry (กันโดน CSMS ล็อก IP)
+      if (/ปฏิเสธ|โดนล็อก|ไม่ได้ตั้ง/.test(e.message)) {
+        console.error('[CSMS] หยุด retry — แก้ CSMS_USER/CSMS_PASS ใน .env แล้ว restart');
+        return;
+      }
+      scheduleReconnect();
+      return;
+    }
+
     console.log(`[CSMS] Connecting to ${CSMS_WS}...`);
-    
-    ws = new WebSocket(CSMS_WS);
+
+    ws = new WebSocket(CSMS_WS, { headers: { Cookie: cookie } });
 
     ws.on('open', () => {
       console.log('✅ [CSMS] WebSocket connected');
@@ -369,19 +396,15 @@ export function initCSMSListener(io: SocketIOServer): void {
 
     ws.on('close', () => {
       console.log('⚠️ [CSMS] WebSocket disconnected');
-      
-      if (reconnectAttempts < maxReconnectAttempts) {
-        reconnectAttempts++;
-        const delay = Math.min(5000 * reconnectAttempts, 30000);
-        console.log(`[CSMS] Reconnecting in ${delay / 1000}s... (attempt ${reconnectAttempts})`);
-        setTimeout(connect, delay);
-      } else {
-        console.error('[CSMS] Max reconnect attempts reached');
-      }
+      scheduleReconnect();
     });
 
     ws.on('error', (err) => {
       console.error('[CSMS] WebSocket error:', err.message);
+      // 401 = cookie หมดอายุ/ไม่ถูกต้อง → ทิ้ง cookie ให้ connect รอบหน้า login ใหม่
+      if (err.message.includes('401')) {
+        clearCsmsCookie();
+      }
     });
   }
 
