@@ -1,4 +1,5 @@
 // C:\Users\Asus\Documents\TACT\tact-backend\src\index.ts
+import 'dotenv/config';  // ← ต้องเป็นบรรทัดแรกสุด: โหลด .env ก่อน import อื่น (ไม่งั้น service ที่อ่าน env ตอน import เช่น csmsAuth จะได้ค่าว่าง)
 import express, { Application, Request, Response, NextFunction } from 'express';
 import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
