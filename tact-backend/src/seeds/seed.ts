@@ -65,6 +65,7 @@ const seedData = async () => {
             type: 'CCS2',
             status: 'Available',
             pricePerKwh: 7.50,
+            connectorId: 1,
           },
           {
             id: 'ladprao-ac-01',
@@ -91,6 +92,7 @@ const seedData = async () => {
             type: 'CCS2',
             status: 'Charging', // มีคนใช้อยู่
             pricePerKwh: 7.50,
+            connectorId: 1,
           },
           {
             id: 'saimai-ac-01',
@@ -117,6 +119,7 @@ const seedData = async () => {
             type: 'CCS2',
             status: 'Offline',
             pricePerKwh: 7.50,
+            connectorId: 1,
           },
           {
             id: 'rangsit-ac-01',

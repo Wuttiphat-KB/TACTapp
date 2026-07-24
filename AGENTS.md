@@ -1,12 +1,12 @@
-# CLAUDE.md — TACT EV Charging Project Context
+# AGENTS.md — TACT EV Charging Project Context
 
-> ไฟล์นี้คือ context รวมของโปรเจกต์ สำหรับใช้กับ Claude Code
-> วางไว้ที่ root ของ workspace เช่น `C:\Users\Asus\Documents\TACT\CLAUDE.md`
+> ไฟล์นี้คือ context รวมของโปรเจกต์ สำหรับใช้กับ Codex
+> วางไว้ที่ root ของ workspace เช่น `C:\Users\Asus\Documents\TACT\AGENTS.md`
 > Last updated: 2026-07-24
 
 ---
 
-## 0. TL;DR สำหรับ Claude Code
+## 0. TL;DR สำหรับ Codex
 
 โปรเจกต์นี้คือระบบชาร์จรถ EV แบบเคลื่อนที่ (ไฟจากเครื่องปั่นไฟ ไม่ใช้กริด) ประกอบด้วย 4 ส่วน:
 
@@ -17,7 +17,7 @@
 
 **งานที่เพิ่งเสร็จ (2026-07-17):** อ่านค่า live DSE4620 (page 4 Modbus) → ส่งขึ้น App ครบเส้น (gen_telemetry.py → backend → ChargerScreen/ChargingScreen) — ดู §8.9
 **งานที่ค้างฝั่ง App/Backend:** Charging History, Profile API, Build APK, capacity→kWh (รอขนาดถังน้ำมัน), generator status readback (รอทีม PLC — ดู `OPEN_QUESTIONS.md`)
-**หมายเหตุ:** CLAUDE.md เคยผิดหลายจุด (§7.4 gen tag, §9.1 ลำดับ start, §2 PLC IP/connector) — ตรวจกับโค้ดก่อนเชื่อ; รายการเต็มใน `OPEN_QUESTIONS.md`
+**หมายเหตุ:** AGENTS.md เคยผิดหลายจุด (§7.4 gen tag, §9.1 ลำดับ start, §2 PLC IP/connector) — ตรวจกับโค้ดก่อนเชื่อ; รายการเต็มใน `OPEN_QUESTIONS.md`
 
 ---
 

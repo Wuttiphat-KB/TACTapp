@@ -76,7 +76,12 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
             status: 'Offline',
           };
         }
-        
+
+        // AC ไม่ใช่ OCPP connector → ไม่เอา status จาก CSMS connector (คุมผ่าน generator/DataTransfer)
+        if (charger.type === 'AC') {
+          return { ...charger, enabled: true, status: 'Available' };
+        }
+
         // ใช้ connectorId จาก charger โดยตรง (ถ้ามี)
         let connectorId: string | null = null;
         
@@ -194,7 +199,12 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
           status: 'Offline',
         };
       }
-      
+
+      // AC ไม่ใช่ OCPP connector → ไม่เอา status จาก CSMS (คุมผ่าน generator/DataTransfer)
+      if (charger.type === 'AC') {
+        return { ...charger, enabled: true, status: 'Available' };
+      }
+
       let connectorId: string | null = null;
       
       if (charger.connectorId) {

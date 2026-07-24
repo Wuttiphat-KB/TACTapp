@@ -105,22 +105,20 @@ router.post(
         return;
       }
 
-      // สั่ง RemoteStart (DC ต้อง Accepted / AC best-effort — gen ติดผ่าน Start_Gen เมื่อ deploy บน server)
-      const startResult = await remoteStart(connectorId, idTag);
-      const startAccepted = startResult.success && startResult.result?.status === 'Accepted';
-
-      if (!startAccepted && chargerType !== 'AC') {
-        // DC: charger ไม่รับ → ยกเลิก
-        unregisterIdTag(idTag);
-        res.status(400).json({
-          success: false,
-          message: 'Charger rejected the start command',
-          error: startResult.error || startResult.result?.status,
-        });
-        return;
-      }
-      if (!startAccepted) {
-        console.warn(`[Charging] AC start: RemoteStart ไม่ผ่าน (${startResult.error || startResult.result?.status}) — สร้าง session ต่อแบบ best-effort`);
+      // สั่ง RemoteStart เฉพาะ DC — AC ไม่ใช่ OCPP connector (gen คุมผ่าน DataTransfer แยก, ดู HANDOFF §4.6-A)
+      // ไม่ยิง RemoteStart ให้ AC เด็ดขาด กันไปสั่งเริ่มชาร์จหัว DC โดยไม่ตั้งใจ
+      if (chargerType !== 'AC') {
+        const startResult = await remoteStart(connectorId, idTag);
+        const startAccepted = startResult.success && startResult.result?.status === 'Accepted';
+        if (!startAccepted) {
+          unregisterIdTag(idTag);
+          res.status(400).json({
+            success: false,
+            message: 'Charger rejected the start command',
+            error: startResult.error || startResult.result?.status,
+          });
+          return;
+        }
       }
 
       // สร้าง ChargingSession (state: "Preparing")

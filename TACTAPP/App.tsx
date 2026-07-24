@@ -256,35 +256,10 @@ const AppContent: React.FC = () => {
             return charger;
           }
           
-          // Map charger to connectorId
-          let chargerConnectorId = 1;
-          
-          // ใช้ connectorId จาก charger โดยตรง (ถ้ามี)
-          if (charger.connectorId) {
-            chargerConnectorId = charger.connectorId;
-          }
-          // ลอง pattern "connector-X"
-          else {
-            const match = charger.id.match(/connector-(\d+)/i);
-            if (match) {
-              chargerConnectorId = parseInt(match[1]);
-            }
-            // ถ้ามี "ccs2" → connector 2
-            else if (charger.id.toLowerCase().includes('ccs2')) {
-              chargerConnectorId = 2;
-            }
-            // ถ้าเป็น type CCS2 → connector 2
-            else if (charger.type === 'CCS2') {
-              chargerConnectorId = 2;
-            }
-            // Fallback: index + 1
-            else {
-              const idx = prev.chargers.findIndex(c => c.id === charger.id);
-              chargerConnectorId = idx + 1;
-            }
-          }
-          
-          if (chargerConnectorId === data.connectorId) {
+          // ใช้ connectorId จาก DB ตรง ๆ — AC ไม่มี connectorId (ไม่ใช่ OCPP connector) → ไม่ match status ใด
+          const chargerConnectorId = charger.connectorId;
+
+          if (chargerConnectorId && chargerConnectorId === data.connectorId) {
             console.log(`[Socket] Updating charger ${charger.id} status: ${charger.status} → ${data.status}`);
             return { ...charger, status: data.status as any };
           }
@@ -395,29 +370,9 @@ const AppContent: React.FC = () => {
       // วิธี 2: ถ้า charger.id มี "ccs2" → connector 2, มี "ac" → connector 1
       // วิธี 3: ใช้ index ใน array + 1
       
-      let connectorId = 1;
-      
-      // ลอง pattern "connector-X" ก่อน
-      const connectorMatch = charger.id.match(/connector-(\d+)/i);
-      if (connectorMatch) {
-        connectorId = parseInt(connectorMatch[1]);
-      }
-      // ถ้ามี "ccs2" ใน id → connector 2
-      else if (charger.id.toLowerCase().includes('ccs2')) {
-        connectorId = 2;
-      }
-      // ถ้าเป็น type CCS2 → connector 2
-      else if (charger.type === 'CCS2') {
-        connectorId = 2;
-      }
-      // Fallback: ใช้ index + 1
-      else {
-        const idx = selectedStation?.chargers.findIndex(c => c.id === charger.id) ?? 0;
-        connectorId = idx + 1;
-      }
-      
-      // Clamp to valid range 1-2
-      connectorId = Math.max(1, Math.min(2, connectorId));
+      // ใช้ connectorId จาก DB ตรง ๆ (CCS2 = 1). AC ไม่มี connectorId → default 1
+      // หมายเหตุ: AC ที่ถูกต้องต้องไปทาง DataTransfer แยก (ไม่ใช่ RemoteStart connector) — ดู HANDOFF §4.6-A
+      const connectorId = charger.connectorId ?? 1;
       
       // หา stationId (MongoDB ใช้ _id)
       const stationId = selectedStation?._id || selectedStation?.id || '';

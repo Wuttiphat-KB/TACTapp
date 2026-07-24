@@ -25,8 +25,10 @@ interface BackendStation {
 interface BackendCharger {
   id: string;
   type: 'CCS2' | 'AC';
-  status: 'Available' | 'Preparing' | 'Charging' | 'Offline' | 'Faulted';
+  status: 'Available' | 'Preparing' | 'Charging' | 'Offline' | 'Faulted' | 'Disabled';
   pricePerKwh: number;
+  connectorId?: number;   // ส่งต่อจาก DB — AC จะไม่มี (ไม่ใช่ OCPP connector)
+  enabled?: boolean;
   currentUserId?: string;
 }
 
@@ -54,6 +56,8 @@ export const mapCharger = (backend: BackendCharger, stationId: string): Charger 
   type: backend.type,
   pricePerKwh: backend.pricePerKwh,
   status: backend.status,
+  connectorId: backend.connectorId,   // ส่งต่อ connectorId (เดิมตกหล่น)
+  enabled: backend.enabled,
 });
 
 /**

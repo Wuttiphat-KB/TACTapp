@@ -2,6 +2,8 @@
 
 > สร้างเมื่อ 2026-07-17 จากการ audit โค้ดจริงทั้ง 4 ส่วน (TACTAPP / tact-backend / OCPP_TACT / CLAUDE.md)
 > **CLAUDE.md ผิดในหลายจุดที่ทำให้วางแผนงานผิด** — ดูหัวข้อ 3 ก่อนเชื่ออะไรใน CLAUDE.md
+>
+> **อัปเดต 2026-07-24:** ทีม PLC ยืนยันให้ใช้ `GV.Start_Gen` เป็น level command ตัวเดียว: `1` = generator ทำงาน, `0` = หยุด จึงยกเลิก `GV.Stop_Gen` และ `write_stop_gen()` แล้ว การอ้างถึง `Stop_Gen` ด้านล่างเป็นประวัติก่อนข้อสรุปนี้
 
 ---
 
@@ -9,13 +11,13 @@
 
 | # | คำถาม | ทำไมถึงสำคัญ |
 |---|---|---|
-| 1 | **`GV.Start_Gen` — PLC latch rising edge หรือ sample level?** | pulse ปัจจุบันกว้างแค่ ~1 HTTP round-trip (`CP.py:1466-1468` ไม่มี sleep คั่น) ต่างจาก `remote_start` (ค้าง 2s) และ `remote_stop` (ค้าง 3s) โดยสิ้นเชิง **ถ้า PLC sample level → gen อาจไม่เคยติดจาก path นี้เลย** เป็นสมมติฐานอันดับ 1 ถ้าเจออาการ "gen ไม่ติด" |
-| 2 | **PLC ดับ generator เองมั้ย?** ถ้าไม่ ใครดับ (คนที่หน้างาน?) | ไม่มี tag `Stop_Gen` ทั้ง tree ⇒ วันนี้ EdgeBox สั่งติดเครื่องแล้ว**ไม่เคยสั่งดับ** |
-| 3 | **ขอ tag `Stop_Gen`** | ต้องมีถึงจะปิด flow ตาม §9.2 ได้ และจำเป็นกับ AC (idle timeout) |
+| 1 | ✅ **ตอบแล้ว: `GV.Start_Gen` เป็น level command** | ส่ง `1` แล้วคงไว้เพื่อให้ generator ทำงาน; ส่ง `0` เพื่อหยุด |
+| 2 | ✅ **ตอบแล้ว: EdgeBox สั่งหยุดผ่าน `Start_Gen=0`** | ไม่ต้องใช้ tag แยก |
+| 3 | ✅ **ยกเลิก `Stop_Gen`** | ลบ `write_stop_gen()` และเปลี่ยน stop path ทั้ง DC/AC เป็น `write_start_gen(..., 0)` แล้ว |
 | 4 | **ขอ tag `generator_status`** (running / voltage / freq / 3-phase ready) | ถ้าไม่มี → timeout handling ทำไม่ได้เลยในหลักการ วันนี้ EdgeBox `sleep(15)` แบบ open-loop ไม่อ่านอะไรกลับ |
 | 5 | **`Head1Done` / `Head1Finishing` / `Head2Done` / `Head2Finishing` หมายถึงอะไรกันแน่?** | เป็น tag **ชุดเดียวที่แยก connector ได้จริง** (`plc_function.py:196-216, 247-266`) — ถ้าหัวที่ 2 หมายถึงหัว AC จริง อาจใช้เป็นจุดยึด AC ได้ |
 | 6 | **ตู้มีหัวชาร์จกี่หัวจริง ๆ ตอนนี้?** | โค้ดบอกได้แค่ว่า software แยกไม่ออก (IP/tag/meter เดียวกันหมด) ต้องยืนยันด้วยตา |
-| 7 | ✅ **ตอบแล้ว (2026-07-21): gen ติด = ไฟเข้าเต้า AC ทันที** (ไม่ต้อง `remote_start`) | ⇒ AC start = แค่สั่ง `Start_Gen`. **แต่ sharpen 2 เรื่อง:** (ก) ปิด AC = ต้องดับ gen → **ต้องมี `Stop_Gen`** (ข้อ 3) (ข) ⚠️ **safety: เต้า AC มีไฟทันทีที่ gen ติด แม้ไม่เสียบอะไร + ไม่มี CP line เช็ค** ⇒ power ไม่ถูก gate ด้วย session เลย ใครเสียบตอน gen ติดก็ได้ไฟ — ต้องคุยทีมไฟฟ้าเรื่อง interlock/authorization |
+| 7 | ✅ **ตอบแล้ว (2026-07-21/24): gen ติด = ไฟเข้าเต้า AC ทันที** (ไม่ต้อง `remote_start`) | AC start = `Start_Gen=1`; AC stop = `Start_Gen=0` เมื่อ DC ไม่ชาร์จ ส่วนความเสี่ยง safety/interlock ยังต้องคุยทีมไฟฟ้า |
 | 8 | **มี energy meter ตัวที่สองบน RS485 bus จริงมั้ย?** | `len_meter_test.py:14-19` มี branch `slaveaddr = 1 if ttyACM0 else 2` = คน**เคยตั้งใจ**ให้มี 2 ตัว แต่ port ถูก hardcode ทับ ⇒ ตอบไม่ได้จากโค้ด ต้องดู hardware |
 
 ## 2. Design decision ที่ต้องมีคนตัดสิน (ยังไม่มีใครตัดสิน)
@@ -25,7 +27,7 @@
 | 9 | **ช่องทางสั่ง gen จาก CSMS → EdgeBox** | OCPP 1.6J ไม่มี verb generator เลือกได้: `DataTransfer` (อยู่ในสเปก แต่ต้องแก้ CSMS ซึ่ง **source ไม่อยู่ใน workspace**) หรือ EdgeBox เปิด HTTP API เอง (เลี่ยง OCPP แต่เพิ่มช่องทางที่ต้องดูแล) **ต้องเลือกก่อนถึงจะออกแบบ backend route ได้** |
 | 10 | **AC session จะจบยังไง?** | ไม่มี CP line ⇒ ไม่มี `Head1Finishing` ⇒ StopTransaction จะ trigger จากอะไร? วันนี้ยิงจาก `Head1Finishing == '1'` (`CP.py:1729-1766`) |
 | 11 | **รู้ได้ไงว่ารถถอดปลั๊ก AC แล้ว?** | ทั้งการ finalize session และ safety ขึ้นกับข้อนี้ |
-| 12 | **AC idle timeout?** ถ้า user กด start-gen แล้วไม่เสียบสาย gen จะเผาน้ำมันไปเรื่อย ๆ นานเท่าไหร่ถึงดับ? | ต่อกับข้อ 2/3 — ไม่มี `Stop_Gen` ⇒ ตอบไม่ได้ |
+| 12 | **AC idle timeout?** ถ้า user กด start-gen แล้วไม่เสียบสาย gen จะเผาน้ำมันไปเรื่อย ๆ นานเท่าไหร่ถึงดับ? | สั่งดับด้วย `Start_Gen=0` ได้แล้ว แต่ยังต้องกำหนดระยะ timeout และเงื่อนไข safety |
 | 13 | **AC วัดพลังงานจาก meter ไหน? คิดเงินยังไงถ้าไม่มี meter แยก?** | `/dev/ttyACM0` slave 1 คือ meter ของ DC ถ้าอ่านค่ารวม → บิลผิด |
 | 14 | **connector 2 จะเอายังไง?** ปิดทิ้ง (register หัวเดียว) หรือทำให้ AC เป็น connector 2 จริง ๆ? | ต้องใช้ tag ที่มี suffix จาก PLC + meter ตัวที่สอง **ตัดสินใจก่อนทำ AC เพราะ AC จะไปยึด connector 2 พอดี** — วันนี้แอป route ทั้ง CCS2 และ AC ไป connector 2 อยู่แล้วโดยบังเอิญ (`App.tsx:391-413`) |
 | 15 | **EdgeBox ยัง offline อยู่มั้ย?** | `MDBlog.txt` เงียบตั้งแต่ **2026-05-22** (~2 เดือน) ต้องรู้ก่อนวางแผน test |
@@ -39,20 +41,20 @@
 
 | Layer | ทำอะไร | ไฟล์ |
 |---|---|---|
-| EdgeBox | เพิ่ม `write_stop_gen()` (ส่ง `GV.Stop_Gen`) | `helpf/plc_function.py` |
+| EdgeBox | เปลี่ยน generator control เป็น `write_start_gen(1/0)` tag เดียว | `helpf/plc_function.py`, `CP.py` |
 | EdgeBox | เรียก `write_stop_gen` ใน remote-stop path ทั้ง 2 connector | `CP.py` (my_remote_stop) |
 | Backend | AC start → session `state='Charging'` เลย (ไม่รอ StartTransaction) + RemoteStart best-effort | `charging.ts` /start |
 | Backend | AC stop → finalize ตรง ๆ (ไม่ต้องมี transactionId) | `charging.ts` /:id/stop |
 | App | AC charger กดได้ตั้งแต่ `Available` (ไม่ต้องรอ Preparing) | `ChargerScreen.tsx` |
 | App | AC start → เข้าหน้า Charging เลย / AC stop → ไป Finishing เลย (ไม่ค้าง "รอถอดสาย") | `App.tsx` |
 
-**ผลข้างเคียงที่ตั้งใจ:** ตอนนี้ DC stop ก็ส่ง `Stop_Gen` ด้วย (ตรงกับ §9.2 "หยุดชาร์จแล้วดับ gen") — **harmless จนกว่า PLC เพิ่ม tag** (เขียนไป tag ที่ไม่มี = ไม่มีผล)
+**อัปเดต 2026-07-24:** DC/AC stop ส่ง `Start_Gen=0` โดยมี guard ไม่ให้ดับเมื่ออีก session ยังใช้งานอยู่
 
 **ยังทำงานจริงไม่ได้จนกว่า:**
-1. 🔴 ทีม PLC เพิ่ม tag `Stop_Gen` (ฝั่งเราส่งแล้ว)
+1. ✅ ไม่ต้องเพิ่ม `Stop_Gen`; ใช้ `Start_Gen=0`
 2. backend รันบน server (local โดน CSMS 401 → RemoteStart/getChargePoints ไปไม่ถึงตู้ → ตู้ขึ้น Offline → ปุ่มกดไม่ได้)
 3. gen ต่อกับตู้จริง
-4. (ถ้าจะให้ AC stop ส่ง Stop_Gen ถึง CP.py จริง) ต้องมี connector/transaction path ของ AC — ผูกกับ decision #14
+4. AC stop ต้องส่ง `DataTransfer(StopGen)` ถึง CP.py เพื่อให้เขียน `Start_Gen=0`
 
 **ยัง defer ตามที่ตกลง:** AC meter (บิล), relay/interlock (safety), logic "ดับ gen เมื่อไม่มี session เหลือ"
 
@@ -108,6 +110,7 @@
 
 | ไฟล์ | ต่างจาก CP.py | สถานะ |
 |---|---|---|
+| `CP(AC).py` | snapshot/backup ของ prototype AC | 📦 **Backup เท่านั้น** — production ใช้ `CP.py` |
 | `CP1.py` | 16 บรรทัด / 3 hunks — ตัด `Start_Gen` block ทั้ง C1/C2 + URL → `wss://ev-ocpp.egat.co.th/ocpp/EDS_150_3` | 🪤 **กับดัก** รันได้ปกติ แต่ต่อ CSMS ของ EGAT และไม่มี generator control |
 | `CP_nomal.py` | 47 บรรทัด — ตัด gen block + เพิ่ม MongoDB block 35 บรรทัด | 💀 **รันไม่ได้** เรียก `start_ocpp_watcher()` / `read_ocpp_config()` ที่อยู่ใน `plc_function.py.bak` เท่านั้น (`.bak` import ไม่ได้) → NameError ก่อนต่อ WS ชื่อ "nomal" หลอกคนอ่านหนักมาก |
 | `helpf/plc_function1.py` | — | 💀 **ของตาย** ไม่มีใคร import และ map `iCpStateCcs=='6'→Preparing` ขณะที่ตัว live ใช้ `'2'` ⇒ ใครฟื้นไฟล์นี้ = Preparing พัง |
