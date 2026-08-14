@@ -4,6 +4,7 @@
 // ตอนนี้ใช้กับ generator (DSE4620) ที่ EdgeBox อ่านผ่าน Modbus แล้ว POST เข้ามา
 import { Router, Request, Response } from 'express';
 import { buildSnapshot, ingestGenerator, getGenerator } from '../services/generatorState';
+import { buildAcSnapshot, ingestAcMeter, getAcMeter } from '../services/acMeterState';
 
 const router = Router();
 
@@ -37,6 +38,34 @@ router.post('/generator', async (req: Request, res: Response): Promise<void> => 
 // @access  Public
 router.get('/generator/:cpId', (req: Request, res: Response): void => {
   res.json({ success: true, data: getGenerator(req.params.cpId) });
+});
+
+// @route   POST /api/telemetry/acmeter
+// @desc    รับค่ามิเตอร์ AC (DTSU666) จาก EdgeBox — CP.py ส่งเฉพาะตอน generator ทำงาน
+// @access  Device (shared secret ผ่าน header X-Device-Key)
+router.post('/acmeter', async (req: Request, res: Response): Promise<void> => {
+  if (DEVICE_KEY) {
+    if (req.header('X-Device-Key') !== DEVICE_KEY) {
+      res.status(401).json({ success: false, message: 'Invalid device key' });
+      return;
+    }
+  } else if (!warnedNoKey) {
+    console.warn('[ACMETER] ⚠️ DEVICE_API_KEY not set — /api/telemetry/* is UNAUTHENTICATED');
+    warnedNoKey = true;
+  }
+
+  const body = (req.body || {}) as Record<string, unknown>;
+  const cpId = String(body.cpId || process.env.CSMS_CP_ID || 'TACT30KW');
+  const snap = buildAcSnapshot(body);
+  await ingestAcMeter(cpId, snap);
+  res.json({ success: true, data: snap });
+});
+
+// @route   GET /api/telemetry/acmeter/:cpId
+// @desc    ดูค่ามิเตอร์ AC ล่าสุด (debug)
+// @access  Public
+router.get('/acmeter/:cpId', (req: Request, res: Response): void => {
+  res.json({ success: true, data: getAcMeter(req.params.cpId) });
 });
 
 export default router;

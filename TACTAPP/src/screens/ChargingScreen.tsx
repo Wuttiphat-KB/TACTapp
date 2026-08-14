@@ -115,6 +115,11 @@ export const ChargingScreen: React.FC<ChargingScreenProps> = ({
   const genStatusColor =
     genStatus === 'Running' ? 'text-green-500' : genStatus === 'Stopped' ? 'text-gray-500' : 'text-red-500';
 
+  // AC ไม่มี MeterValues ทาง OCPP → ใช้ค่าจากมิเตอร์ AC (DTSU666) แทน
+  // DC ใช้ค่าจาก session ตามเดิม
+  const acLive = station.acMeter && !station.acMeter.stale ? station.acMeter : null;
+  const displayPowerKw = !isDC && acLive?.powerKw != null ? acLive.powerKw : session.powerKw;
+
   return (
     <View className="flex-1 bg-white">
       <Header showClose onClose={onClose} />
@@ -144,7 +149,7 @@ export const ChargingScreen: React.FC<ChargingScreenProps> = ({
         <View className="flex-row flex-wrap justify-around px-4 py-6 mx-4">
           <View className="items-center w-1/2 mb-4">
             <Text className="text-3xl font-bold text-gray-800">
-              {session.powerKw.toFixed(1)} kW
+              {displayPowerKw.toFixed(1)} kW
             </Text>
             <Text className="text-gray-500">{t('power')}</Text>
           </View>

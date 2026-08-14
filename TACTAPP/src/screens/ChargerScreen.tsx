@@ -148,6 +148,10 @@ export const ChargerScreen: React.FC<ChargerScreenProps> = ({
   const genStatusColor =
     genStatus === 'Running' ? 'text-green-500' : genStatus === 'Stopped' ? 'text-gray-500' : 'text-red-500';
 
+  // มิเตอร์ AC — CP.py อ่านเฉพาะตอน gen ทำงาน ดังนั้น stale/null = ปกติตอน gen ดับ
+  const ac = station.acMeter;
+  const acLive = ac && !ac.stale ? ac : null;
+
   return (
     <View className="flex-1 bg-white">
       <Header showClose onClose={onClose} />
@@ -255,6 +259,13 @@ export const ChargerScreen: React.FC<ChargerScreenProps> = ({
                     <Text className={`text-sm mt-1 ${isDisabled ? 'text-gray-300' : 'text-gray-500'}`}>
                       {t('pricePerKwh')} {charger.pricePerKwh.toFixed(2)} {t('bahtPerKwh')}
                     </Text>
+                    {/* ค่าจ่ายไฟจริงจากมิเตอร์ AC (มีเฉพาะตอน generator ทำงาน) */}
+                    {charger.type === 'AC' && acLive && acLive.powerKw != null && (
+                      <Text className="text-sm mt-1 text-green-600">
+                        {acLive.powerKw.toFixed(2)} kW
+                        {acLive.voltage != null ? ` · ${acLive.voltage.toFixed(0)} V` : ''}
+                      </Text>
+                    )}
                   </View>
 
                   <View 

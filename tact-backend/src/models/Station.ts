@@ -34,6 +34,14 @@ export interface IStation extends Document {
     voltageL1N: number | null;
     updatedAt: Date | null;
   };
+  acMeter?: {                    // ← ค่า live จากมิเตอร์ AC (DTSU666) ผ่าน CP.py
+    powerKw: number | null;
+    energyTotal: number | null;
+    voltage: number | null;
+    current: number | null;
+    frequency: number | null;
+    updatedAt: Date | null;
+  };
   ownerPhone: string;
   chargers: ICharger[];
   createdAt: Date;
@@ -129,6 +137,15 @@ const StationSchema = new Schema(
       batteryVoltage: { type: Number, default: null },
       coolantTemp: { type: Number, default: null },
       voltageL1N: { type: Number, default: null },
+      updatedAt: { type: Date, default: null },
+    },
+    // ค่า live ของมิเตอร์ AC (DTSU666) — เขียนโดย acMeterState service
+    acMeter: {
+      powerKw: { type: Number, default: null },
+      energyTotal: { type: Number, default: null },
+      voltage: { type: Number, default: null },
+      current: { type: Number, default: null },
+      frequency: { type: Number, default: null },
       updatedAt: { type: Date, default: null },
     },
     ownerPhone: {

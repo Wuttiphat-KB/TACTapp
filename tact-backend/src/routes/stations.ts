@@ -4,6 +4,7 @@ import Station from '../models/Station';
 import { authenticate, authorize } from '../middleware/auth';
 import { getChargePoints, triggerStatusNotification, triggerAllConnectorStatus } from '../services/ocppBridge';
 import { withGeneratorFreshness } from '../services/generatorState';
+import { withAcMeterFreshness } from '../services/acMeterState';
 
 const router = Router();
 
@@ -120,8 +121,8 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
       });
       
       stationObj.chargers = updatedChargers;
-      // ผสมค่า generator ที่สดที่สุด + คิด staleness (deployment นี้มี gen ตัวเดียว)
-      return withGeneratorFreshness(stationObj);
+      // ผสมค่า generator + AC meter ที่สดที่สุด + คิด staleness (deployment นี้มีตู้เดียว)
+      return withAcMeterFreshness(withGeneratorFreshness(stationObj));
     });
 
     res.json({
@@ -242,6 +243,7 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
 
     stationObj.chargers = updatedChargers;
     withGeneratorFreshness(stationObj);
+    withAcMeterFreshness(stationObj);
 
     res.json({
       success: true,

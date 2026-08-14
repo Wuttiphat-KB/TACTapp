@@ -123,6 +123,43 @@ export async function remoteStop(transactionId: number): Promise<CommandResponse
 }
 
 /**
+ * ส่ง OCPP DataTransfer ไปยัง Charge Point (vendor-specific command)
+ *
+ * ใช้คุม generator สำหรับ AC — AC ไม่ใช่ OCPP connector (ไม่มีสาย CP → ไม่มี
+ * Preparing/Charging/StopTransaction) จึงสั่งผ่าน DataTransfer แทน RemoteStart
+ *   messageId: 'StartGen' = สั่ง generator ติด (ไฟเข้าเต้า AC)
+ *              'StopGen'  = สั่ง generator ดับ (CP.py มี guard: ไม่ดับถ้า DC ยังชาร์จ)
+ * ฝั่งรับอยู่ที่ CP.py @on(Action.DataTransfer)
+ */
+export async function dataTransfer(
+  messageId: 'StartGen' | 'StopGen',
+  data?: string
+): Promise<{ success: boolean; status?: string; error?: string }> {
+  try {
+    console.log(`[OCPP] DataTransfer: messageId=${messageId}`);
+
+    const response = await csmsAxios.post(`${CSMS_URL}/api/command`, {
+      cp_id: CP_ID,
+      command: 'data_transfer',
+      params: {
+        vendor_id: 'TACT',
+        message_id: messageId,
+        data: data ?? '',
+      },
+    });
+
+    console.log(`[OCPP] DataTransfer response:`, response.data);
+
+    // CP.py ตอบ Accepted / UnknownMessageId — ถ้าไม่มี result ถือว่า Accepted (เหมือน verb อื่น)
+    const status = response.data?.result?.status ?? 'Accepted';
+    return { success: (response.data?.success ?? true) && status === 'Accepted', status };
+  } catch (error: any) {
+    console.error('[OCPP] DataTransfer error:', error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
  * ดูสถานะ Charge Points ทั้งหมด
  */
 export async function getChargePoints(): Promise<ChargePointStatus[]> {

@@ -4,12 +4,13 @@ import { body, validationResult } from 'express-validator';
 import ChargingSession from '../models/ChargingSession';
 import Station from '../models/Station';
 import { authenticate } from '../middleware/auth';
-import { 
-  addRfidCard, 
-  remoteStart, 
-  remoteStop, 
+import {
+  addRfidCard,
+  remoteStart,
+  remoteStop,
+  dataTransfer,
   generateIdTag,
-  getConnectorStatus 
+  getConnectorStatus
 } from '../services/ocppBridge';
 import { registerIdTagUser, unregisterIdTag } from '../services/csmsListener';
 
@@ -105,9 +106,21 @@ router.post(
         return;
       }
 
-      // สั่ง RemoteStart เฉพาะ DC — AC ไม่ใช่ OCPP connector (gen คุมผ่าน DataTransfer แยก, ดู HANDOFF §4.6-A)
-      // ไม่ยิง RemoteStart ให้ AC เด็ดขาด กันไปสั่งเริ่มชาร์จหัว DC โดยไม่ตั้งใจ
-      if (chargerType !== 'AC') {
+      // AC: ไม่ใช่ OCPP connector (ไม่มีสาย CP) → สั่ง generator ติดผ่าน DataTransfer
+      //     gen ติด = ไฟเข้าเต้า AC ทันที (ยืนยันกับทีมหน้างานแล้ว)
+      // DC: RemoteStart ตามปกติ — ห้ามยิง RemoteStart ให้ AC เด็ดขาด (จะไปสั่งหัว DC แทน)
+      if (chargerType === 'AC') {
+        const genResult = await dataTransfer('StartGen');
+        if (!genResult.success) {
+          unregisterIdTag(idTag);
+          res.status(400).json({
+            success: false,
+            message: 'ไม่สามารถสั่งเครื่องปั่นไฟได้',
+            error: genResult.error || genResult.status,
+          });
+          return;
+        }
+      } else {
         const startResult = await remoteStart(connectorId, idTag);
         const startAccepted = startResult.success && startResult.result?.status === 'Accepted';
         if (!startAccepted) {
@@ -204,25 +217,30 @@ router.post(
         return;
       }
 
-      // AC: ไม่มี OCPP transaction (ไม่มีสาย CP) → finalize ตรง ๆ + สั่งดับ gen best-effort
+      // AC: ไม่มี OCPP transaction (ไม่มีสาย CP) → สั่งดับ gen ผ่าน DataTransfer แล้ว finalize
+      // CP.py มี guard: ถ้า DC ยังมี transaction ค้างอยู่จะไม่ดับ gen (กันตัดไฟหัวที่ยังชาร์จ)
       if (session.chargerType === 'AC') {
+        const genResult = await dataTransfer('StopGen');
+        if (!genResult.success) {
+          // ดับ gen ไม่สำเร็จ = ไฟยังอาจค้างที่เต้า → ห้ามปิด session เงียบ ๆ ให้ผู้ใช้รู้
+          console.error('[Charging] AC stop: StopGen failed —', genResult.error || genResult.status);
+          res.status(502).json({
+            success: false,
+            message: 'ไม่สามารถสั่งดับเครื่องปั่นไฟได้ กรุณาลองใหม่',
+            error: genResult.error || genResult.status,
+          });
+          return;
+        }
+
         session.state = 'Stopped';
         session.status = 'Inactive';
         session.endTime = new Date();
         await session.save();
         unregisterIdTag(session.idTag);
 
-        // TODO(AC): สั่ง Stop_Gen ให้ถึง CP.py จริง ยังรอ 2 อย่าง:
-        //   (1) ทีม PLC เพิ่ม tag Stop_Gen ฝั่ง PLC
-        //   (2) connector/transaction path ของ AC (OPEN_QUESTIONS #14)
-        // ถ้าเผื่ออนาคต AC มี transactionId ค่อยยิง remoteStop (→ CP.py จะ write_stop_gen)
-        if (session.transactionId) {
-          try { await remoteStop(session.transactionId); } catch (e) { /* best-effort */ }
-        }
-
         res.json({
           success: true,
-          message: 'AC session stopped (generator stop pending PLC Stop_Gen tag)',
+          message: 'AC session stopped (generator stop command sent)',
         });
         return;
       }

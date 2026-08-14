@@ -49,6 +49,19 @@ interface ConnectorStatusData {
   errorCode?: string;
 }
 
+interface AcMeterUpdateData {
+  cpId: string;
+  acMeter: {
+    powerKw: number | null;
+    energyTotal: number | null;
+    voltage: number | null;
+    current: number | null;
+    frequency: number | null;
+    updatedAt: string;
+    stale: boolean;
+  };
+}
+
 interface GeneratorUpdateData {
   cpId: string;
   generator: {
@@ -200,6 +213,16 @@ export function onGeneratorUpdate(callback: EventCallback<GeneratorUpdateData>):
 }
 
 /**
+ * Listen for AC meter updates (DTSU666 — ส่งเฉพาะตอน generator ทำงาน)
+ */
+export function onAcMeterUpdate(callback: EventCallback<AcMeterUpdateData>): () => void {
+  if (!socket) return () => {};
+
+  socket.on('acMeterUpdate', callback);
+  return () => socket?.off('acMeterUpdate', callback);
+}
+
+/**
  * Ping server to test connection
  */
 export function pingServer(): Promise<{ pong: boolean; timestamp: number }> {
@@ -230,5 +253,6 @@ export default {
   onChargingFaulted,
   onConnectorStatus,
   onGeneratorUpdate,
+  onAcMeterUpdate,
   pingServer,
 };

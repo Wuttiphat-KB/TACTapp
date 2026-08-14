@@ -31,6 +31,7 @@ import {
   onChargingFaulted,
   onConnectorStatus,
   onGeneratorUpdate,
+  onAcMeterUpdate,
 } from './src/services/socket';
 
 import './global.css';
@@ -268,6 +269,11 @@ const AppContent: React.FC = () => {
         
         return { ...prev, chargers: updatedChargers };
       });
+    });
+
+    // อัพเดทค่ามิเตอร์ AC (ส่งเฉพาะตอน generator ทำงาน)
+    onAcMeterUpdate((data) => {
+      setSelectedStation(prev => (prev ? { ...prev, acMeter: data.acMeter } : prev));
     });
 
     // อัพเดทค่า generator (station-scoped, broadcast จาก backend telemetry)

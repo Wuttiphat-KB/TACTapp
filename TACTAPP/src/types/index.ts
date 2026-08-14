@@ -29,6 +29,7 @@ export interface Station {
   status: 'Online' | 'Offline';
   generatorFuelLevel: number; // (legacy) ปริมาณน้ำมัน — ใช้ generator.fuelLevel แทน
   generator?: GeneratorLive | null; // ค่า live จาก DSE4620 (ผ่าน backend telemetry)
+  acMeter?: AcMeterLive | null;     // ค่า live จากมิเตอร์ AC (DTSU666) — มีเฉพาะตอน gen ทำงาน
   chargers: Charger[];
   ownerPhone: string;
 }
@@ -44,6 +45,18 @@ export interface GeneratorLive {
   voltageL1N: number | null;     // V
   updatedAt: string;
   stale: boolean;                // true = ค่าเก่าเกิน threshold (EdgeBox/poller เงียบ)
+}
+
+// ค่า live ของมิเตอร์ AC (DTSU666) — CP.py อ่านเฉพาะตอน generator ทำงาน
+// stale = true ตอน gen ดับเป็นเรื่องปกติ (ไม่ใช่ error)
+export interface AcMeterLive {
+  powerKw: number | null;
+  energyTotal: number | null;   // kWh สะสมของมิเตอร์
+  voltage: number | null;
+  current: number | null;
+  frequency: number | null;
+  updatedAt: string;
+  stale: boolean;
 }
 
 // Charger Types

@@ -9,6 +9,7 @@ import connectDB from './config/database';
 import { authRoutes, stationRoutes, chargingRoutes, telemetryRoutes } from './routes';
 import { initCSMSListener } from './services/csmsListener';
 import { initGeneratorState } from './services/generatorState';
+import { initAcMeterState } from './services/acMeterState';
 
 // Load environment variables
 dotenv.config();
@@ -123,6 +124,9 @@ initCSMSListener(io);
 
 // ========== Initialize Generator telemetry (staleness watchdog + socket) ==========
 initGeneratorState(io);
+
+// ========== Initialize AC meter telemetry (DTSU666 via CP.py) ==========
+initAcMeterState(io);
 
 // 404 handler
 app.use((req: Request, res: Response) => {
