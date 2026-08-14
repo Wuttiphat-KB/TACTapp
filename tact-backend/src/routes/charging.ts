@@ -13,6 +13,7 @@ import {
   getConnectorStatus
 } from '../services/ocppBridge';
 import { registerIdTagUser, unregisterIdTag } from '../services/csmsListener';
+import { getAcMeter, emitAcChargingStopped } from '../services/acMeterState';
 
 const router = Router();
 
@@ -232,15 +233,38 @@ router.post(
           return;
         }
 
+        // สรุปยอดสุดท้ายจากมิเตอร์ AC (ไม่มี StopTransaction ให้พึ่ง)
+        const endTime = new Date();
+        const finalAc = getAcMeter(session.cpId);
+        if (finalAc?.energyTotal != null && session.meterStart != null) {
+          session.meterStop = Math.round(finalAc.energyTotal * 1000);
+          session.energyCharged = Math.max(0, finalAc.energyTotal - session.meterStart / 1000);
+        }
+        session.chargingTime = Math.max(0, Math.floor((endTime.getTime() - session.startTime.getTime()) / 1000));
+        session.totalPrice = session.energyCharged * session.pricePerKwh;
+        session.carbonReduce = session.energyCharged * 0.5;
+        session.powerKw = 0;
         session.state = 'Stopped';
         session.status = 'Inactive';
-        session.endTime = new Date();
+        session.endTime = endTime;
         await session.save();
         unregisterIdTag(session.idTag);
+
+        // แจ้งแอปแบบเดียวกับ DC เพื่อให้หน้า Finishing ได้ตัวเลขครบ
+        const stopPayload = {
+          sessionId: session._id.toString(),
+          energyCharged: session.energyCharged,
+          chargingTime: session.chargingTime,
+          totalPrice: session.totalPrice,
+          carbonReduce: session.carbonReduce,
+          reason: 'ACStop',
+        };
+        emitAcChargingStopped(session.userId.toString(), session._id.toString(), stopPayload);
 
         res.json({
           success: true,
           message: 'AC session stopped (generator stop command sent)',
+          data: stopPayload,
         });
         return;
       }

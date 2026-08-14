@@ -262,7 +262,7 @@ export const ChargerScreen: React.FC<ChargerScreenProps> = ({
                     {/* ค่าจ่ายไฟจริงจากมิเตอร์ AC (มีเฉพาะตอน generator ทำงาน) */}
                     {charger.type === 'AC' && acLive && acLive.powerKw != null && (
                       <Text className="text-sm mt-1 text-green-600">
-                        {acLive.powerKw.toFixed(2)} kW
+                        {Math.abs(acLive.powerKw).toFixed(2)} kW
                         {acLive.voltage != null ? ` · ${acLive.voltage.toFixed(0)} V` : ''}
                       </Text>
                     )}

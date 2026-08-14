@@ -46,21 +46,29 @@ export const ChargingScreen: React.FC<ChargingScreenProps> = ({
   const { t, language } = useLanguage();
 
   // ========== Smooth Timer ==========
-  const [displayTime, setDisplayTime] = useState(session.chargingTime);
-  const lastServerTimeRef = useRef(session.chargingTime);
+  // นับจาก session.startTime เป็นหลัก → กลับเข้าหน้านี้ใหม่แล้วเวลาไม่รีเซ็ตเป็น 0
+  // (ถ้า server ส่ง chargingTime มา (DC) จะ sync ตามค่า server เพราะเป็นตัวคิดเงิน)
+  const elapsedFromStart = () =>
+    Math.max(0, Math.floor((Date.now() - new Date(session.startTime).getTime()) / 1000));
+
+  const [displayTime, setDisplayTime] = useState(() => session.chargingTime || elapsedFromStart());
+  const serverDrivenRef = useRef(session.chargingTime > 0);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Sync with server time when meterUpdate arrives
   useEffect(() => {
-    lastServerTimeRef.current = session.chargingTime;
-    setDisplayTime(session.chargingTime);
+    if (session.chargingTime > 0) {
+      serverDrivenRef.current = true;
+      setDisplayTime(session.chargingTime);
+    }
   }, [session.chargingTime]);
 
   // Timer นับทุก 1 วินาที (เฉพาะตอนกำลังชาร์จ)
   useEffect(() => {
     if (session.state === 'Charging' && !isWaitingUnplug) {
       timerRef.current = setInterval(() => {
-        setDisplayTime(prev => prev + 1);
+        // ยังไม่มีค่าจาก server → คิดจากนาฬิกาจริง (กัน drift และกันรีเซ็ตตอน remount)
+        setDisplayTime(prev => (serverDrivenRef.current ? prev + 1 : elapsedFromStart()));
       }, 1000);
     }
 
@@ -118,7 +126,8 @@ export const ChargingScreen: React.FC<ChargingScreenProps> = ({
   // AC ไม่มี MeterValues ทาง OCPP → ใช้ค่าจากมิเตอร์ AC (DTSU666) แทน
   // DC ใช้ค่าจาก session ตามเดิม
   const acLive = station.acMeter && !station.acMeter.stale ? station.acMeter : null;
-  const displayPowerKw = !isDC && acLive?.powerKw != null ? acLive.powerKw : session.powerKw;
+  // abs() กัน CT clamp กลับด้าน (มิเตอร์รายงานเป็นค่าลบ) — เต้า AC มีแต่โหลด ไม่มีการจ่ายย้อน
+  const displayPowerKw = !isDC && acLive?.powerKw != null ? Math.abs(acLive.powerKw) : session.powerKw;
 
   return (
     <View className="flex-1 bg-white">

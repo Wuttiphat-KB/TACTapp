@@ -6,6 +6,7 @@
 //   → staleness ที่นี่จึงแปลว่า "ไม่มีข้อมูลสด" ไม่ได้แปลว่าระบบพัง
 import { Server as SocketIOServer } from 'socket.io';
 import Station from '../models/Station';
+import ChargingSession from '../models/ChargingSession';
 
 const STALE_MS = 35_000;            // CP.py ส่งทุก ~5s → เงียบเกินนี้ = ไม่สด
 const WATCHDOG_INTERVAL_MS = 15_000;
@@ -101,11 +102,71 @@ async function persistAcMeter(cpId: string, snap: AcMeterSnapshot): Promise<void
   }
 }
 
-/** เรียกจาก route: update memory + persist + broadcast */
+/**
+ * อัปเดต session AC ที่กำลังทำงานจากค่ามิเตอร์
+ * AC ไม่มี MeterValues ทาง OCPP → พลังงาน/เวลา/ค่าไฟต้องคิดจากมิเตอร์ตัวนี้แทน
+ *   - ค่าแรกที่ได้หลังเริ่ม session = meterStart (baseline)
+ *   - energyCharged = ค่าปัจจุบัน - baseline
+ * emit 'meterUpdate' ห้อง session เดียวกับ DC เพื่อให้แอปอัปเดตเหมือนกัน
+ */
+async function updateAcSession(cpId: string, snap: AcMeterSnapshot): Promise<void> {
+  if (snap.energyTotal == null) return;
+  try {
+    const session = await ChargingSession.findOne({
+      cpId,
+      chargerType: 'AC',
+      status: 'Active',
+      state: { $in: ['Preparing', 'Charging'] },
+    });
+    if (!session) return;
+
+    // meterStart เก็บเป็น Wh (เหมือน DC) — ค่าแรกหลัง gen ติดคือ baseline
+    if (session.meterStart == null) {
+      session.meterStart = Math.round(snap.energyTotal * 1000);
+    }
+    const startKwh = (session.meterStart || 0) / 1000;
+    const energyCharged = Math.max(0, snap.energyTotal - startKwh);
+    const chargingTime = Math.max(0, Math.floor((Date.now() - session.startTime.getTime()) / 1000));
+
+    session.state = 'Charging';
+    session.powerKw = snap.powerKw ?? 0;
+    session.energyCharged = energyCharged;
+    session.chargingTime = chargingTime;
+    session.totalPrice = energyCharged * session.pricePerKwh;
+    session.carbonReduce = energyCharged * 0.5;
+    await session.save();
+
+    ioRef?.to(`session:${session._id.toString()}`).emit('meterUpdate', {
+      sessionId: session._id.toString(),
+      soc: null,                       // AC ไม่มี SoC (ไม่มีสาย CP)
+      powerKw: session.powerKw,
+      energyCharged,
+      chargingTime,
+      totalPrice: session.totalPrice,
+      carbonReduce: session.carbonReduce,
+      voltage: snap.voltage ?? undefined,
+      currentA: snap.current ?? undefined,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (e) {
+    console.error('[ACMETER] session update error:', e);
+  }
+}
+
+/** เรียกจาก route: update memory + persist + broadcast + อัปเดต session AC ที่วิ่งอยู่ */
 export async function ingestAcMeter(cpId: string, snap: AcMeterSnapshot): Promise<void> {
   store.set(cpId, { snap, readAt: Date.now() });
   await persistAcMeter(cpId, snap);
   ioRef?.emit('acMeterUpdate', { cpId, acMeter: snap });
+  await updateAcSession(cpId, snap);
+}
+
+/**
+ * ส่ง chargingStopped ให้ session AC (ใช้ ioRef ที่นี่ เลี่ยง circular import จาก routes → index)
+ */
+export function emitAcChargingStopped(userId: string, sessionId: string, payload: any): void {
+  ioRef?.to(`user:${userId}`).emit('chargingStopped', payload);
+  ioRef?.to(`session:${sessionId}`).emit('chargingStopped', payload);
 }
 
 /** ตั้งค่า io + staleness watchdog (เรียกครั้งเดียวจาก index.ts) */
