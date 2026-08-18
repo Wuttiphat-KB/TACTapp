@@ -17,6 +17,17 @@ export const txnToSession = new Map<number, string>();
 // Mapping: sessionId → startTime (สำหรับคำนวณ chargingTime)
 const sessionStartTime = new Map<string, Date>();
 
+// Mapping: sessionId → เวลาที่ได้ MeterValues ล่าสุด (ใช้พิสูจน์ว่า "ยังชาร์จอยู่จริง")
+const lastMeterAt = new Map<string, number>();
+
+// Mapping: sessionId → timer ที่รอ finalize (กัน schedule ซ้ำ)
+const pendingFinalize = new Map<string, NodeJS.Timeout>();
+
+// ถือว่ายังชาร์จอยู่ถ้าได้ MeterValues ภายในกี่ ms (CP ส่งทุก ~4-6s)
+const METER_ACTIVE_MS = 30_000;
+// หน่วงก่อน finalize ผ่าน fallback เพื่อรอดูว่า MeterValues หยุดจริงมั้ย
+const FINALIZE_GRACE_MS = 30_000;
+
 /**
  * Parse ค่าจาก MeterValues string เช่น "45 Percent" → 45
  */
@@ -33,6 +44,48 @@ function calcChargingTime(sessionId: string): number {
   const start = sessionStartTime.get(sessionId);
   if (!start) return 0;
   return Math.floor((Date.now() - start.getTime()) / 1000);
+}
+
+/**
+ * ตรวจซ้ำหลังพ้น grace period ว่าควรปิด session มั้ย
+ * ปิดเฉพาะเมื่อ "MeterValues หยุดไหลจริง" — ถ้ายังไหลอยู่แปลว่ายังชาร์จ ปล่อยไว้
+ */
+async function recheckFinalize(sessionId: string, io: SocketIOServer): Promise<void> {
+  const session = await ChargingSession.findById(sessionId);
+  if (!session || session.status !== 'Active') return;   // ถูกปิดไปแล้วทางอื่น (StopTransaction)
+
+  const meterAge = Date.now() - (lastMeterAt.get(sessionId) ?? 0);
+  if (meterAge < METER_ACTIVE_MS) {
+    console.log(`[CSMS] recheck: session ${sessionId} ยังชาร์จอยู่ (MeterValues ${Math.round(meterAge / 1000)}s ที่แล้ว) — ไม่ปิด`);
+    return;
+  }
+
+  console.log(`[CSMS] recheck: session ${sessionId} เงียบเกิน ${METER_ACTIVE_MS / 1000}s — ปิด session`);
+  const chargingTime = calcChargingTime(sessionId) ||
+    Math.floor((Date.now() - session.startTime.getTime()) / 1000);
+  session.state = 'Stopped';
+  session.status = 'Inactive';
+  session.chargingTime = chargingTime;
+  session.totalPrice = session.energyCharged * session.pricePerKwh;
+  session.carbonReduce = session.energyCharged * 0.5;
+  session.endTime = new Date();
+  await session.save();
+
+  const stopData = {
+    sessionId,
+    energyCharged: session.energyCharged,
+    chargingTime,
+    totalPrice: session.totalPrice,
+    carbonReduce: session.carbonReduce,
+    reason: 'ConnectorAvailable',
+  };
+  const userId = idTagToUser.get(session.idTag);
+  if (userId) io.to(`user:${userId}`).emit('chargingStopped', stopData);
+  io.to(`session:${sessionId}`).emit('chargingStopped', stopData);
+
+  if (session.transactionId) txnToSession.delete(session.transactionId);
+  sessionStartTime.delete(sessionId);
+  lastMeterAt.delete(sessionId);
 }
 
 /**
@@ -156,7 +209,8 @@ export function initCSMSListener(io: SocketIOServer): void {
           case 'MeterValues': {
             const { txnId, values, connector } = data;
             const sessionId = txnToSession.get(txnId);
-            
+            if (sessionId) lastMeterAt.set(sessionId, Date.now());
+
             if (!sessionId) {
               // ลอง match จาก connector ถ้าไม่มี txnId
               break;
@@ -269,6 +323,12 @@ export function initCSMSListener(io: SocketIOServer): void {
             // Cleanup
             txnToSession.delete(txnId);
             sessionStartTime.delete(sessionId);
+            lastMeterAt.delete(sessionId);
+            const pending = pendingFinalize.get(sessionId);
+            if (pending) {
+              clearTimeout(pending);          // ปิดด้วย StopTransaction แล้ว ไม่ต้อง finalize ซ้ำ
+              pendingFinalize.delete(sessionId);
+            }
             break;
           }
 
@@ -313,9 +373,32 @@ export function initCSMSListener(io: SocketIOServer): void {
 
               console.log(`[CSMS] Fallback: Found session:`, session ? `${session._id} (connectorId=${session.connectorId})` : 'none');
 
+              // ⚠️ อย่าปิด session ทันที — StatusNotification อาจเป็น blip ชั่วคราวจาก PLC
+              //    ขณะที่รถยังชาร์จอยู่จริง (เคยเกิดจริง: แอปเด้งไปหน้า Finishing ทั้งที่ยังชาร์จ)
+              //    ถ้ายังมี MeterValues ไหลอยู่ = ยังชาร์จจริง → เลื่อนไปตรวจซ้ำ ไม่ปิดตอนนี้
+              //    เคสหยุดจริงมี StopTransaction ปิดให้อยู่แล้ว fallback เป็นแค่ตาข่ายกันเหนียว
               if (session) {
+                const sid = session._id.toString();
+                const meterAge = Date.now() - (lastMeterAt.get(sid) ?? 0);
+
+                if (meterAge < METER_ACTIVE_MS) {
+                  if (!pendingFinalize.has(sid)) {
+                    console.log(`[CSMS] Fallback: session ${sid} ยังมี MeterValues (${Math.round(meterAge / 1000)}s ที่แล้ว) — เลื่อนตรวจซ้ำอีก ${FINALIZE_GRACE_MS / 1000}s`);
+                    pendingFinalize.set(
+                      sid,
+                      setTimeout(() => {
+                        pendingFinalize.delete(sid);
+                        recheckFinalize(sid, io).catch(err =>
+                          console.error('[CSMS] recheckFinalize error:', err)
+                        );
+                      }, FINALIZE_GRACE_MS)
+                    );
+                  }
+                  break;
+                }
+
                 console.log(`[CSMS] Fallback: Finalizing session ${session._id} (connector ${connector} became ${status})`);
-                
+
                 // คำนวณ chargingTime
                 const chargingTime = calcChargingTime(session._id.toString()) || 
                   Math.floor((Date.now() - session.startTime.getTime()) / 1000);
