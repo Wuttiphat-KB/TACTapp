@@ -6,6 +6,11 @@ import { API_BASE_URL } from '../config/api';
 const SOCKET_URL = API_BASE_URL.replace('/api', '');
 
 let socket: Socket | null = null;
+let socketUserId: string | null = null;
+
+// session room ที่แอปต้องอยู่ — server ลืม room ทุกครั้งที่ socket หลุด (เน็ตสะดุด / แอปไป background)
+// จึงต้อง join ใหม่ทุกครั้งที่ต่อติด ไม่งั้น meterUpdate จะหยุดมาเงียบ ๆ
+const joinedSessions = new Set<string>();
 
 interface MeterUpdateData {
   sessionId: string;
@@ -83,24 +88,39 @@ type EventCallback<T> = (data: T) => void;
  * เชื่อมต่อ Socket.IO
  */
 export function connectSocket(userId: string): Socket {
-  if (socket?.connected) {
-    console.log('[Socket] Already connected');
+  // มี socket ของ user นี้อยู่แล้ว (ต่ออยู่ หรือกำลัง reconnect) → ใช้ตัวเดิม
+  // เดิมเช็คแค่ .connected → ระหว่างกำลังต่อจะสร้าง socket ซ้อน และ listener ที่ผูกกับตัวเดิมจะไม่ทำงาน
+  if (socket && socketUserId === userId) {
+    if (!socket.connected) socket.connect();
     return socket;
+  }
+  if (socket) {
+    // เปลี่ยน user โดยไม่ได้ logout → ทิ้ง socket และ room ของคนเดิม
+    socket.disconnect();
+    socket = null;
+    joinedSessions.clear();
   }
 
   console.log(`[Socket] Connecting to ${SOCKET_URL}...`);
 
+  socketUserId = userId;
   socket = io(SOCKET_URL, {
     auth: { userId },
     transports: ['websocket'],
     reconnection: true,
-    reconnectionAttempts: 10,
+    // เดิม 10 ครั้ง (~50 วิ) แล้วเลิกถาวร → เน็ตหน้างานหลุดนานกว่านั้น = ไม่มีค่า real-time อีกเลยจนกว่าจะปิดแอป
+    reconnectionAttempts: Infinity,
     reconnectionDelay: 1000,
     reconnectionDelayMax: 5000,
   });
 
   socket.on('connect', () => {
     console.log(`✅ [Socket] Connected: ${socket?.id}`);
+    // join session room ใหม่ทุกครั้งที่ต่อติด (รวมครั้งแรก — กรณี joinSession ถูกเรียกก่อน socket ต่อเสร็จ)
+    joinedSessions.forEach((sessionId) => {
+      socket?.emit('joinSession', sessionId);
+      console.log(`[Socket] (Re)joined session: ${sessionId}`);
+    });
   });
 
   socket.on('disconnect', (reason) => {
@@ -118,11 +138,33 @@ export function connectSocket(userId: string): Socket {
  * ตัดการเชื่อมต่อ Socket.IO
  */
 export function disconnectSocket(): void {
+  joinedSessions.clear();
   if (socket) {
     socket.disconnect();
     socket = null;
+    socketUserId = null;
     console.log('[Socket] Disconnected manually');
   }
+}
+
+/**
+ * ต่อ socket ใหม่ถ้าหลุดอยู่ (เรียกตอนแอปกลับมาจาก background)
+ */
+export function ensureSocketConnected(): void {
+  if (socket && !socket.connected) {
+    socket.connect();
+  }
+}
+
+/**
+ * เรียก callback เมื่อ socket ต่อกลับมาได้หลังหลุด — ใช้ sync สถานะที่อาจพลาดไประหว่างหลุด
+ */
+export function onSocketReconnect(callback: () => void): () => void {
+  if (!socket) return () => {};
+
+  const manager = socket.io;
+  manager.on('reconnect', callback);
+  return () => manager.off('reconnect', callback);
 }
 
 /**
@@ -136,6 +178,8 @@ export function getSocket(): Socket | null {
  * Join session room (รับ meterUpdate)
  */
 export function joinSession(sessionId: string): void {
+  // จำไว้เสมอ — ถ้ายังไม่ต่อ จะ join ให้ตอน 'connect' (เดิมถ้ายังไม่ต่อ = ไม่ join เลย ค่าไม่อัปเดต)
+  joinedSessions.add(sessionId);
   if (socket?.connected) {
     socket.emit('joinSession', sessionId);
     console.log(`[Socket] Joined session: ${sessionId}`);
@@ -146,6 +190,7 @@ export function joinSession(sessionId: string): void {
  * Leave session room
  */
 export function leaveSession(sessionId: string): void {
+  joinedSessions.delete(sessionId);
   if (socket?.connected) {
     socket.emit('leaveSession', sessionId);
     console.log(`[Socket] Left session: ${sessionId}`);
@@ -244,6 +289,8 @@ export function pingServer(): Promise<{ pong: boolean; timestamp: number }> {
 export default {
   connectSocket,
   disconnectSocket,
+  ensureSocketConnected,
+  onSocketReconnect,
   getSocket,
   joinSession,
   leaveSession,

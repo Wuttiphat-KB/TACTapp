@@ -14,6 +14,7 @@ interface ApiResponse<T> {
   data?: T;
   error?: string;
   message?: string;
+  networkError?: boolean;   // true = ไม่ได้คำตอบจาก server เลย (เน็ตหลุด/timeout) → retry ได้
   count?: number;
   cancelledCount?: number;
   pagination?: {
@@ -58,11 +59,14 @@ const TOKEN_KEY = 'tact_auth_token';
 class ApiClient {
   private baseUrl: string;
   private token: string | null = null;
+  // โหลด token จาก AsyncStorage เป็น async → ทุก request ต้องรอให้โหลดเสร็จก่อน
+  // (เดิม getMe() ตอนเปิดแอปอาจยิงออกไปก่อน token โหลดเสร็จ → 401 → เด้งไปหน้า Login ทั้งที่เคย login ไว้)
+  private tokenReady: Promise<void>;
 
   constructor() {
     this.baseUrl = API_BASE_URL;
     // โหลด token จาก storage เมื่อสร้าง instance
-    this.loadToken();
+    this.tokenReady = this.loadToken();
   }
 
   // โหลด token จาก AsyncStorage
@@ -102,6 +106,7 @@ class ApiClient {
     endpoint: string,
     options: RequestInit = {}
   ): Promise<ApiResponse<T>> {
+    await this.tokenReady;
     const url = `${this.baseUrl}${endpoint}`;
 
     const headers: HeadersInit = {
@@ -139,12 +144,14 @@ class ApiClient {
           success: false,
           error: 'Request timeout',
           message: 'การเชื่อมต่อหมดเวลา กรุณาลองใหม่',
+          networkError: true,
         };
       }
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Network error',
         message: 'ไม่สามารถเชื่อมต่อ Server ได้',
+        networkError: true,
       };
     }
   }
@@ -228,6 +235,11 @@ class ApiClient {
 
   async getActiveSession(): Promise<ApiResponse<any>> {
     return this.request('/charging/active');
+  }
+
+  // ดู session ตาม id (ใช้เช็คว่า session ที่ค้างอยู่ในเครื่องจบไปแล้วหรือยัง ตอนเปิดแอปใหม่)
+  async getChargingSession(sessionId: string): Promise<ApiResponse<any>> {
+    return this.request(`/charging/${sessionId}`);
   }
 
   async getChargingHistory(page: number = 1, limit: number = 10): Promise<ApiResponse<any>> {

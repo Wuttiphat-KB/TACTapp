@@ -418,6 +418,15 @@ router.get('/:id', authenticate, async (req: Request, res: Response): Promise<vo
       return;
     }
 
+    // ดูได้เฉพาะ session ของตัวเอง (แอปใช้ endpoint นี้ดึงสรุป session ที่จบระหว่างปิดแอป)
+    if (session.userId.toString() !== req.user!._id.toString()) {
+      res.status(403).json({
+        success: false,
+        message: 'Not authorized to view this session',
+      });
+      return;
+    }
+
     res.json({
       success: true,
       data: session,

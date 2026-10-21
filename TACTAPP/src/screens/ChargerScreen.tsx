@@ -23,6 +23,7 @@ interface ChargerScreenProps {
   onGoToCharging?: () => void;
   isCharging?: boolean;
   currentChargerId?: string;
+  currentChargerType?: Charger['type']; // ประเภทหัวของ session ที่กำลังชาร์จ (ใช้เมื่อ id ไม่ตรง)
   activeTab?: TabName;
   onTabChange?: (tab: TabName) => void;
   isLoading?: boolean; // ← NEW: แสดง loading ขณะเรียก API
@@ -35,6 +36,7 @@ export const ChargerScreen: React.FC<ChargerScreenProps> = ({
   onGoToCharging,
   isCharging = false,
   currentChargerId,
+  currentChargerType,
   activeTab = 'charger',
   onTabChange,
   isLoading = false,
@@ -42,14 +44,28 @@ export const ChargerScreen: React.FC<ChargerScreenProps> = ({
   const { t, language } = useLanguage();
   const [selectedCharger, setSelectedCharger] = useState<Charger | null>(null);
 
+  // ปุ่มกลับเข้า transaction ที่กำลังชาร์จ — แสดงเสมอเมื่อมี session อยู่ ไม่ต้องเลือกหัวก่อน
+  const viewChargingButton = (
+    <TouchableOpacity
+      className="rounded-lg py-4 items-center bg-blue-500"
+      onPress={() => onGoToCharging?.()}
+    >
+      <Text className="text-white font-semibold text-lg">{t('viewChargingStatus')}</Text>
+    </TouchableOpacity>
+  );
+
   if (!station) {
     return (
       <View className="flex-1 bg-white">
         <Header showClose onClose={onClose} />
-        
+
         <View className="flex-1 items-center justify-center">
           <Text className="text-gray-500">No station selected</Text>
         </View>
+
+        {isCharging && onGoToCharging && (
+          <View className="p-4 border-t border-gray-100">{viewChargingButton}</View>
+        )}
 
         <BottomTabs activeTab={activeTab} onTabChange={onTabChange} />
       </View>
@@ -85,8 +101,14 @@ export const ChargerScreen: React.FC<ChargerScreenProps> = ({
     }
   };
 
+  // หัวที่ผู้ใช้กำลังชาร์จอยู่ — เทียบ id ก่อน ถ้า id ไม่ตรงหัวไหนเลย ใช้ประเภทหัวแทน (เมื่อสถานีมีหัวประเภทนั้นหัวเดียว)
   const isMyCharging = (charger: Charger) => {
-    return isCharging && currentChargerId === charger.id;
+    if (!isCharging) return false;
+    if (currentChargerId && charger.id === currentChargerId) return true;
+    if (!currentChargerType || charger.type !== currentChargerType) return false;
+    const idMatchesAnyCharger = station.chargers.some((c) => c.id === currentChargerId);
+    const sameTypeCount = station.chargers.filter((c) => c.type === currentChargerType).length;
+    return !idMatchesAnyCharger && sameTypeCount === 1;
   };
 
   const isChargerDisabled = (charger: Charger) => {
@@ -116,6 +138,8 @@ export const ChargerScreen: React.FC<ChargerScreenProps> = ({
         return t('preparing');
       case 'Charging':
         return t('inUse');
+      case 'Finishing':
+        return t('connectorFinishing');
       case 'Offline':
         return t('offline');
       case 'Faulted':
@@ -241,6 +265,11 @@ export const ChargerScreen: React.FC<ChargerScreenProps> = ({
                 key={charger.id}
                 className={`bg-white border-2 rounded-lg p-4 mb-3 ${borderColor}`}
                 onPress={() => {
+                  // แตะหัวที่กำลังชาร์จของตัวเอง → กลับหน้า Charging เลย
+                  if (isMyChargingCharger) {
+                    onGoToCharging?.();
+                    return;
+                  }
                   if (isSelectable) {
                     setSelectedCharger(charger);
                   }
@@ -293,26 +322,16 @@ export const ChargerScreen: React.FC<ChargerScreenProps> = ({
         {/* Instructions */}
         <View className="px-4 py-2">
           <Text className="text-gray-500 text-center text-sm">
-            {t('plugInCable')}
+            {isCharging ? t('activeSessionHint') : t('plugInCable')}
           </Text>
         </View>
       </ScrollView>
 
       {/* Start Button */}
       <View className="p-4 border-t border-gray-100">
-        {selectedCharger && isMyCharging(selectedCharger) ? (
-          <TouchableOpacity
-            className="rounded-lg py-4 items-center bg-blue-500"
-            onPress={() => {
-              if (onGoToCharging) {
-                onGoToCharging();
-              }
-            }}
-          >
-            <Text className="text-white font-semibold text-lg">
-              {t('viewChargingStatus')}
-            </Text>
-          </TouchableOpacity>
+        {isCharging && onGoToCharging ? (
+          // มี session ที่กำลังชาร์จอยู่ (user หนึ่งคนชาร์จได้ทีละ session) → ปุ่มกลับเข้า transaction แทนปุ่ม Start
+          viewChargingButton
         ) : (
           <TouchableOpacity
             className={`rounded-lg py-4 items-center ${

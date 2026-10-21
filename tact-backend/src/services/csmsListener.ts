@@ -29,6 +29,16 @@ const METER_ACTIVE_MS = 30_000;
 const FINALIZE_GRACE_MS = 30_000;
 
 /**
+ * ห้องที่ต้องส่ง event ของ session ไป: ห้องของ session + ห้องของเจ้าของ session
+ * - ห้อง user: แอป join อัตโนมัติตอนต่อ socket → ยังได้ event แม้ join ห้อง session ไม่ทัน/หลุดแล้ว server ลืมห้อง
+ * - userId เอาจาก session ใน DB (ไม่ใช้ idTagToUser ใน RAM ที่หายเมื่อ backend restart)
+ * ส่ง io.to([...]) ครั้งเดียว → socket ที่อยู่ทั้ง 2 ห้องได้ event ครั้งเดียว ไม่ซ้ำ
+ */
+function sessionRooms(session: { _id: unknown; userId: unknown }): string[] {
+  return [`session:${String(session._id)}`, `user:${String(session.userId)}`];
+}
+
+/**
  * Parse ค่าจาก MeterValues string เช่น "45 Percent" → 45
  */
 function parseVal(str: string | undefined): number {
@@ -79,9 +89,7 @@ async function recheckFinalize(sessionId: string, io: SocketIOServer): Promise<v
     carbonReduce: session.carbonReduce,
     reason: 'ConnectorAvailable',
   };
-  const userId = idTagToUser.get(session.idTag);
-  if (userId) io.to(`user:${userId}`).emit('chargingStopped', stopData);
-  io.to(`session:${sessionId}`).emit('chargingStopped', stopData);
+  io.to(sessionRooms(session)).emit('chargingStopped', stopData);
 
   if (session.transactionId) txnToSession.delete(session.transactionId);
   sessionStartTime.delete(sessionId);
@@ -164,14 +172,15 @@ export function initCSMSListener(io: SocketIOServer): void {
           case 'StartTransaction': {
             const { txnId, idTag, connector, meterStart } = data;
             const upperIdTag = idTag?.toUpperCase();
-            const userId = idTagToUser.get(upperIdTag);
-            
-            if (!userId) {
-              console.log(`[CSMS] StartTransaction: Unknown idTag ${idTag}`);
+
+            if (!upperIdTag) {
+              console.log('[CSMS] StartTransaction: missing idTag');
               break;
             }
 
-            // หา session ที่รอ transaction
+            // หา session ที่รอ transaction จาก DB โดยตรง
+            // (เดิมต้องมี idTag ใน idTagToUser ที่อยู่ใน RAM ก่อน → backend restart ระหว่างรอ
+            //  = session ค้าง Preparing ตลอดไป แอปเปิดใหม่ก็ติดหน้า "กำลังเริ่มชาร์จ")
             const session = await ChargingSession.findOne({
               idTag: upperIdTag,
               state: 'Preparing',
@@ -196,7 +205,7 @@ export function initCSMSListener(io: SocketIOServer): void {
             console.log(`[CSMS] Session ${session._id} started, txnId=${txnId}`);
 
             // Emit ไป App
-            io.to(`user:${userId}`).emit('chargingStarted', {
+            io.to(sessionRooms(session)).emit('chargingStarted', {
               sessionId: session._id.toString(),
               transactionId: txnId,
               state: 'Charging',
@@ -248,8 +257,8 @@ export function initCSMSListener(io: SocketIOServer): void {
             session.carbonReduce = carbonReduce;
             await session.save();
 
-            // Emit ไป App
-            io.to(`session:${sessionId}`).emit('meterUpdate', {
+            // Emit ไป App (ห้อง session + ห้อง user — กลับเข้าแอปใหม่/เน็ตหลุดแล้วต่อใหม่ ค่ายังมาถึง)
+            io.to(sessionRooms(session)).emit('meterUpdate', {
               sessionId,
               soc,
               powerKw,
@@ -295,23 +304,10 @@ export function initCSMSListener(io: SocketIOServer): void {
             session.endTime = new Date();
             await session.save();
 
-            // หา userId
-            const userId = idTagToUser.get(session.idTag);
-
             console.log(`[CSMS] Session ${sessionId} stopped, reason=${reason}`);
 
             // Emit ไป App
-            if (userId) {
-              io.to(`user:${userId}`).emit('chargingStopped', {
-                sessionId,
-                energyCharged,
-                chargingTime,
-                totalPrice,
-                carbonReduce,
-                reason,
-              });
-            }
-            io.to(`session:${sessionId}`).emit('chargingStopped', {
+            io.to(sessionRooms(session)).emit('chargingStopped', {
               sessionId,
               energyCharged,
               chargingTime,
@@ -362,11 +358,14 @@ export function initCSMSListener(io: SocketIOServer): void {
               console.log(`[CSMS] Fallback check: Looking for active session on connector ${connectorNum}`);
               
               // หา active session ของ connector นี้ (รองรับทั้ง int และ string)
+              // ยกเว้น AC: AC ไม่ใช่ OCPP connector แต่ session ถูกบันทึก connectorId=1 ซ้ำกับหัว DC
+              // → status ของหัว DC (เช่น Available) เคยไปปิด session AC ที่ยังจ่ายไฟอยู่
               const session = await ChargingSession.findOne({
                 $or: [
                   { connectorId: connectorNum },
                   { connectorId: connector.toString() },
                 ],
+                chargerType: { $ne: 'AC' },
                 state: { $in: ['Preparing', 'Charging'] },
                 status: 'Active',
               });
@@ -414,9 +413,6 @@ export function initCSMSListener(io: SocketIOServer): void {
                 session.endTime = new Date();
                 await session.save();
 
-                // หา userId
-                const userId = idTagToUser.get(session.idTag);
-
                 // Emit ไป App
                 const stopData = {
                   sessionId: session._id.toString(),
@@ -427,12 +423,8 @@ export function initCSMSListener(io: SocketIOServer): void {
                   reason: 'ConnectorAvailable',
                 };
 
-                if (userId) {
-                  console.log(`[CSMS] Emitting chargingStopped to user:${userId}`);
-                  io.to(`user:${userId}`).emit('chargingStopped', stopData);
-                }
-                console.log(`[CSMS] Emitting chargingStopped to session:${session._id.toString()}`);
-                io.to(`session:${session._id.toString()}`).emit('chargingStopped', stopData);
+                console.log(`[CSMS] Emitting chargingStopped to ${sessionRooms(session).join(', ')}`);
+                io.to(sessionRooms(session)).emit('chargingStopped', stopData);
 
                 // Cleanup
                 if (session.transactionId) {
@@ -450,6 +442,7 @@ export function initCSMSListener(io: SocketIOServer): void {
               // หา active session ของ connector นี้
               const session = await ChargingSession.findOne({
                 connectorId: connector,
+                chargerType: { $ne: 'AC' },   // AC ไม่ใช่ OCPP connector (ดู fallback ด้านบน)
                 state: 'Charging',
                 status: 'Active',
               });
@@ -459,14 +452,11 @@ export function initCSMSListener(io: SocketIOServer): void {
                 session.errorCode = error || 'CONNECTOR_FAULT';
                 await session.save();
 
-                const userId = idTagToUser.get(session.idTag);
-                if (userId) {
-                  io.to(`user:${userId}`).emit('chargingFaulted', {
-                    sessionId: session._id.toString(),
-                    connectorId: connector,
-                    errorCode: error || 'CONNECTOR_FAULT',
-                  });
-                }
+                io.to(sessionRooms(session)).emit('chargingFaulted', {
+                  sessionId: session._id.toString(),
+                  connectorId: connector,
+                  errorCode: error || 'CONNECTOR_FAULT',
+                });
               }
             }
             break;

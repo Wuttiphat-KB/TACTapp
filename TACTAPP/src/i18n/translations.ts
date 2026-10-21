@@ -84,6 +84,8 @@ export const translations = {
     faulted: 'Faulted',
     yourCharging: 'Your Charging',
     viewChargingStatus: 'View Charging Status',
+    activeSessionHint: 'You have a charging session in progress.',
+    connectorFinishing: 'Finished (please unplug)',
     
     // Charging
     charging: 'Charging',
@@ -218,6 +220,8 @@ export const translations = {
     faulted: 'ขัดข้อง',
     yourCharging: 'กำลังชาร์จของคุณ',
     viewChargingStatus: 'ดูสถานะการชาร์จ',
+    activeSessionHint: 'คุณมีการชาร์จที่กำลังดำเนินอยู่',
+    connectorFinishing: 'ชาร์จเสร็จแล้ว (รอถอดสาย)',
     
     // Charging
     charging: 'กำลังชาร์จ',

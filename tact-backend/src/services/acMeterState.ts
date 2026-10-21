@@ -136,7 +136,8 @@ async function updateAcSession(cpId: string, snap: AcMeterSnapshot): Promise<voi
     session.carbonReduce = energyCharged * 0.5;
     await session.save();
 
-    ioRef?.to(`session:${session._id.toString()}`).emit('meterUpdate', {
+    // ห้อง session + ห้องเจ้าของ (แอปอยู่ห้อง user เสมอ → ค่ามาถึงแม้ join ห้อง session ไม่ทัน/หลุด)
+    ioRef?.to([`session:${session._id.toString()}`, `user:${session.userId.toString()}`]).emit('meterUpdate', {
       sessionId: session._id.toString(),
       soc: null,                       // AC ไม่มี SoC (ไม่มีสาย CP)
       powerKw: session.powerKw,
@@ -165,8 +166,8 @@ export async function ingestAcMeter(cpId: string, snap: AcMeterSnapshot): Promis
  * ส่ง chargingStopped ให้ session AC (ใช้ ioRef ที่นี่ เลี่ยง circular import จาก routes → index)
  */
 export function emitAcChargingStopped(userId: string, sessionId: string, payload: any): void {
-  ioRef?.to(`user:${userId}`).emit('chargingStopped', payload);
-  ioRef?.to(`session:${sessionId}`).emit('chargingStopped', payload);
+  // ส่งครั้งเดียวไปทั้ง 2 ห้อง → socket ที่อยู่ทั้งสองห้องได้ event ครั้งเดียว ไม่ซ้ำ
+  ioRef?.to([`user:${userId}`, `session:${sessionId}`]).emit('chargingStopped', payload);
 }
 
 /** ตั้งค่า io + staleness watchdog (เรียกครั้งเดียวจาก index.ts) */

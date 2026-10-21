@@ -1,6 +1,7 @@
 // C:\Users\Asus\Documents\TACT\TACTAPP\App.tsx
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { View, SafeAreaView, StatusBar, Alert } from 'react-native';
+import { View, SafeAreaView, StatusBar, Alert, AppState, AppStateStatus } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LanguageProvider } from './src/contexts/LanguageContext';
 import { AuthProvider, useAuth } from './src/contexts/AuthContext';
 import {
@@ -19,10 +20,12 @@ import {
 } from './src/screens';
 import { BottomTabs, TabName } from './src/components/BottomTabs';
 import { Station, Charger, ChargingSession } from './src/types';
-import { apiClient } from './src/services/api';
+import { apiClient, ApiResponse } from './src/services/api';
 import {
   connectSocket,
   disconnectSocket,
+  ensureSocketConnected,
+  onSocketReconnect,
   joinSession,
   leaveSession,
   onMeterUpdate,
@@ -46,6 +49,118 @@ type AppScreen =
   | 'Charging'
   | 'Finishing'
   | 'ChargingHistory';
+
+// ========== Session restore helpers ==========
+// เก็บ id ของ session ล่าสุดไว้ในเครื่อง → ถ้า session จบระหว่างที่แอปถูกปัดทิ้ง
+// เปิดแอปใหม่ยังพาไปหน้าสรุป (Finishing) ของ transaction นั้นได้ — ล้างเมื่อผู้ใช้กด Finish
+const LAST_SESSION_KEY = 'tact_last_session_id';
+// session ที่จบนานเกินนี้แล้ว (และไม่ได้เปิดค้างไว้ในแอป) ไม่ต้องเด้งหน้าสรุปแล้ว
+const SUMMARY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+const saveLastSessionId = async (sessionId: string) => {
+  try {
+    await AsyncStorage.setItem(LAST_SESSION_KEY, sessionId);
+  } catch (error) {
+    console.warn('[App] Save last session id failed:', error);
+  }
+};
+
+const loadLastSessionId = async (): Promise<string | null> => {
+  try {
+    return await AsyncStorage.getItem(LAST_SESSION_KEY);
+  } catch {
+    return null;
+  }
+};
+
+const clearLastSessionId = async () => {
+  try {
+    await AsyncStorage.removeItem(LAST_SESSION_KEY);
+  } catch {
+    // ignore
+  }
+};
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+// เรียกซ้ำเฉพาะตอนไม่ได้คำตอบจาก server (เน็ตมือถือหน้างานสะดุด) — ถ้า server ตอบ error มาแล้วไม่ retry
+async function withRetry<T>(call: () => Promise<ApiResponse<T>>, attempts: number): Promise<ApiResponse<T>> {
+  let res = await call();
+  for (let i = 1; i < attempts && !res.success && res.networkError; i++) {
+    await sleep(1500 * i);
+    res = await call();
+  }
+  return res;
+}
+
+// stationId ใน session อาจเป็น id ตรง ๆ หรือ object ที่ populate มาแล้ว
+const sessionStationId = (s: any): string | null => {
+  const st = s?.stationId;
+  if (!st) return null;
+  return String(typeof st === 'object' ? st._id : st);
+};
+
+// แปลง session จาก backend → ChargingSession ของแอป
+const toClientSession = (s: any): ChargingSession => ({
+  id: String(s._id),
+  chargerId: s.chargerId,
+  stationId: sessionStationId(s) ?? '',
+  userId: String(s.userId),
+  soc: s.chargerType === 'AC' ? null : s.soc ?? 0,
+  state: s.state,
+  powerKw: s.powerKw || 0,
+  chargingTime: s.chargingTime || 0,
+  energyCharged: s.energyCharged || 0,
+  status: s.status,
+  carbonReduce: s.carbonReduce || 0,
+  fuelUsed: s.fuelUsed || 0,
+  totalPrice: s.totalPrice || 0,
+  startTime: new Date(s.startTime),
+  endTime: s.endTime ? new Date(s.endTime) : undefined,
+});
+
+// หา "หัวชาร์จของ session" ในข้อมูลสถานี — ห้ามล้มแค่เพราะ id ไม่ตรง
+// (เดิม: หาด้วย id อย่างเดียว ไม่เจอ → selectedCharger = null → หน้า Charging ไม่ render
+//  → ตกไปหน้า Charger ที่หัวชาร์จเป็นสีเทากดไม่ได้ และกลับเข้า transaction เดิมไม่ได้)
+const resolveSessionCharger = (station: Station | null, s: any): Charger => {
+  const chargers: Charger[] = station?.chargers ?? [];
+  const type: Charger['type'] = s.chargerType === 'AC' ? 'AC' : 'CCS2';
+  const sameType = chargers.filter((c) => c.type === type);
+  const found =
+    chargers.find((c) => c.id === s.chargerId) ||
+    // AC ไม่ใช่ OCPP connector (connectorId ใน session ไม่มีความหมาย) → เทียบ connector เฉพาะ DC
+    (type === 'CCS2' ? sameType.find((c) => c.connectorId === s.connectorId) : undefined) ||
+    (sameType.length === 1 ? sameType[0] : undefined);
+  if (found) return found;
+
+  // หาไม่เจอจริง ๆ → สร้างจากข้อมูล session (หน้า Charging ใช้แค่ประเภทหัว)
+  return {
+    id: s.chargerId,
+    stationId: sessionStationId(s) ?? '',
+    type,
+    pricePerKwh: s.pricePerKwh ?? 0,
+    status: 'Charging',
+    connectorId: s.connectorId,
+  };
+};
+
+// สำรองตอนโหลดข้อมูลสถานีไม่สำเร็จ: ใช้ชื่อ/รุ่น/ที่ตั้งที่ populate มากับ session พอให้หน้า Charging/Finishing แสดงได้
+const stationFromSession = (s: any): Station | null => {
+  const st = s?.stationId;
+  if (!st || typeof st !== 'object') return null;
+  return {
+    _id: String(st._id),
+    id: String(st._id),
+    name: st.name ?? '',
+    model: st.chargerModel ?? '',
+    chargerModel: st.chargerModel,
+    location: st.location ?? { address: '', latitude: 0, longitude: 0 },
+    status: 'Online',
+    generatorFuelLevel: 0,
+    chargers: [],
+    ownerPhone: '',
+  };
+};
 
 const AppContent: React.FC = () => {
   const { isAuthenticated, user } = useAuth();
@@ -76,69 +191,139 @@ const AppContent: React.FC = () => {
   // Track if socket listeners are set up
   const socketListenersRef = useRef(false);
 
-  // ========== Check Active Session (หลัง login) ==========
-  const checkActiveSession = useCallback(async () => {
-    try {
-      console.log('[App] Checking for active session...');
-      const response = await apiClient.getActiveSession();
-      
-      if (response.success && response.data) {
-        const session = response.data;
-        console.log('[App] Found active session:', session._id, 'state:', session.state);
-        
-        // Restore session
-        const restoredSession: ChargingSession = {
-          id: session._id,
-          chargerId: session.chargerId,
-          stationId: session.stationId?._id || session.stationId,
-          userId: session.userId,
-          soc: session.soc || 0,
-          state: session.state,
-          powerKw: session.powerKw || 0,
-          chargingTime: session.chargingTime || 0,
-          energyCharged: session.energyCharged || 0,
-          status: session.status,
-          carbonReduce: session.carbonReduce || 0,
-          fuelUsed: session.fuelUsed || 0,
-          totalPrice: session.totalPrice || 0,
-          startTime: new Date(session.startTime),
-        };
-        
-        setCurrentSession(restoredSession);
-        setIsCharging(true);
-        
-        // ดึงข้อมูล station
-        if (session.stationId) {
-          const stationId = session.stationId._id || session.stationId;
-          const stationRes = await apiClient.getStationById(stationId);
-          if (stationRes.success && stationRes.data) {
-            setSelectedStation(stationRes.data);
-            
-            // หา charger ที่กำลังชาร์จ
-            const charger = stationRes.data.chargers?.find(
-              (c: any) => c.id === session.chargerId
-            );
-            if (charger) {
-              setSelectedCharger(charger);
-            }
-          }
-        }
-        
-        // Join session room
-        joinSession(session._id);
-        
-        // ไปหน้า Charging
-        setCurrentScreen('Charging');
-        setActiveTab('charger');
-        
-        console.log('[App] Session restored successfully');
-      } else {
-        console.log('[App] No active session found');
-      }
-    } catch (error) {
-      console.error('[App] Check active session error:', error);
-    }
+  // ========== Sync session กับ server ==========
+  // เรียกตอน login / เปิดแอปใหม่ (navigate=true) และตอนแอปกลับจาก background / socket ต่อใหม่ (navigate=false)
+  // - ยังชาร์จอยู่ → คืนสภาพ session + หัวชาร์จ + join room (กลับเข้า transaction เดิมได้เสมอ)
+  // - จบไปแล้วระหว่างแอปปิด/อยู่เบื้องหลัง (พลาด event chargingStopped) → พาไปหน้าสรุปของ transaction นั้น
+  // refs ให้ callback ที่ถูกเรียกแบบ async (AppState, socket) เห็นค่าล่าสุดเสมอ
+  const currentSessionRef = useRef<ChargingSession | null>(null);
+  const currentScreenRef = useRef<AppScreen>('Loading');
+  const selectedStationRef = useRef<Station | null>(null);
+  const isSyncingRef = useRef(false);
+  const pendingNavigateRef = useRef(false);
+
+  useEffect(() => { currentSessionRef.current = currentSession; }, [currentSession]);
+  useEffect(() => { currentScreenRef.current = currentScreen; }, [currentScreen]);
+  useEffect(() => { selectedStationRef.current = selectedStation; }, [selectedStation]);
+
+  const loadSessionStation = useCallback(async (s: any): Promise<Station | null> => {
+    const stationId = sessionStationId(s);
+    if (!stationId) return null;
+
+    const res = await withRetry(() => apiClient.getStationById(stationId), 2);
+    if (res.success && res.data) return res.data;
+
+    // โหลดไม่สำเร็จ → ใช้ข้อมูลที่มีอยู่ในแอป ถ้าเป็นสถานีเดียวกัน ไม่งั้นใช้ข้อมูลที่ populate มากับ session
+    const current = selectedStationRef.current;
+    if (current && String(current._id || current.id) === stationId) return current;
+    return stationFromSession(s);
   }, []);
+
+  const syncActiveSession = useCallback(async ({ navigate }: { navigate: boolean }) => {
+    if (navigate) pendingNavigateRef.current = true;
+    if (isSyncingRef.current) return; // รอบที่กำลังวิ่งอยู่จะเห็น pendingNavigateRef เอง
+    isSyncingRef.current = true;
+
+    try {
+      console.log('[App] Syncing session with server...');
+      const response = await withRetry(
+        () => apiClient.getActiveSession(),
+        pendingNavigateRef.current ? 3 : 1
+      );
+
+      if (!response.success) {
+        // เน็ตยังไม่พร้อม → ไม่แตะ state เดิม ลองใหม่ตอนแอปกลับมา active / socket ต่อใหม่
+        console.warn('[App] Sync session failed:', response.message || response.error);
+        pendingNavigateRef.current = false;
+        return;
+      }
+
+      // ===== ยังมี session ที่ทำงานอยู่ → กลับเข้า transaction เดิม =====
+      if (response.data) {
+        const s = response.data;
+        const sessionId = String(s._id);
+
+        // กำลังดูหน้าสรุปอยู่ → ไม่ทับ ให้ผู้ใช้กด Finish ก่อน
+        if (currentScreenRef.current === 'Finishing') {
+          pendingNavigateRef.current = false;
+          return;
+        }
+
+        const station = await loadSessionStation(s);
+        if (station) setSelectedStation(station);
+        setSelectedCharger(resolveSessionCharger(station, s));
+        setCurrentSession(toClientSession(s));
+        setIsCharging(true);
+        joinSession(sessionId);
+        saveLastSessionId(sessionId);
+
+        if (pendingNavigateRef.current) {
+          pendingNavigateRef.current = false;
+          setCurrentScreen('Charging');
+          setActiveTab('charger');
+        }
+        console.log('[App] Session restored:', sessionId, 'state:', s.state);
+        return;
+      }
+
+      // ===== ไม่มี session ที่ทำงานอยู่แล้ว =====
+      // เช็คว่า session ที่แอปถืออยู่ (หรือที่จำไว้ในเครื่อง) จบไปตอนแอปปิด/อยู่เบื้องหลังหรือเปล่า
+      const local = currentSessionRef.current;
+      const localPendingId =
+        local &&
+        currentScreenRef.current !== 'Finishing' &&
+        (local.state === 'Preparing' || local.state === 'Charging')
+          ? local.id
+          : null;
+      const pendingId = localPendingId || (await loadLastSessionId());
+
+      if (!pendingId) {
+        pendingNavigateRef.current = false;
+        console.log('[App] No active session');
+        return;
+      }
+
+      const sessionRes = await withRetry(() => apiClient.getChargingSession(pendingId), 2);
+      if (!sessionRes.success || !sessionRes.data) {
+        // server ตอบว่าไม่มี session นี้ → เลิกตามหา / เน็ตหลุด → เก็บไว้ลองรอบหน้า
+        if (!sessionRes.networkError) await clearLastSessionId();
+        pendingNavigateRef.current = false;
+        return;
+      }
+
+      const s = sessionRes.data;
+      const ended = s.status === 'Inactive' || s.state === 'Stopped' || s.state === 'Faulted';
+      if (!ended) {
+        pendingNavigateRef.current = false;
+        return;
+      }
+
+      const endedAt = s.endTime ? new Date(s.endTime).getTime() : Date.now();
+      if (!localPendingId && Date.now() - endedAt > SUMMARY_MAX_AGE_MS) {
+        // จบไปนานแล้ว ไม่ต้องเด้งหน้าสรุป
+        await clearLastSessionId();
+        pendingNavigateRef.current = false;
+        return;
+      }
+
+      const station = await loadSessionStation(s);
+      if (station) setSelectedStation(station);
+      setSelectedCharger(resolveSessionCharger(station, s));
+      setCurrentSession({ ...toClientSession(s), state: 'Stopped', endTime: new Date(endedAt) });
+      setIsCharging(false);
+      setIsWaitingUnplug(false);
+      setIsStoppingCharge(false);
+      isStoppingRef.current = false;
+      leaveSession(String(s._id));
+      pendingNavigateRef.current = false;
+      setCurrentScreen('Finishing');
+      console.log('[App] Session ended while app was away → Finishing:', s._id);
+    } catch (error) {
+      console.error('[App] Sync session error:', error);
+    } finally {
+      isSyncingRef.current = false;
+    }
+  }, [loadSessionStation]);
 
   // ========== Socket.IO Connection ==========
   useEffect(() => {
@@ -146,15 +331,21 @@ const AppContent: React.FC = () => {
       // เชื่อม Socket.IO เมื่อ login
       console.log('[Socket] Connecting for user:', user.id);
       connectSocket(user.id);
-      
+
       // Setup event listeners (once)
       if (!socketListenersRef.current) {
         setupSocketListeners();
+        // socket ต่อกลับมาได้หลังหลุด → อาจพลาด event ระหว่างหลุด → sync สถานะ session ใหม่
+        // (การ join session room ใหม่ socket.ts ทำให้อัตโนมัติ)
+        onSocketReconnect(() => {
+          console.log('[Socket] Reconnected — syncing session');
+          syncActiveSession({ navigate: false });
+        });
         socketListenersRef.current = true;
       }
-      
-      // เช็ค active session (เมื่อ login หรือ reopen app)
-      checkActiveSession();
+
+      // เช็ค session กับ server (เมื่อ login หรือ reopen app) แล้วพาไปหน้าที่ถูกต้อง
+      syncActiveSession({ navigate: true });
     } else {
       // ตัดการเชื่อมต่อเมื่อ logout
       disconnectSocket();
@@ -165,7 +356,24 @@ const AppContent: React.FC = () => {
       // Cleanup on unmount
       disconnectSocket();
     };
-  }, [isAuthenticated, user?.id, checkActiveSession]);
+  }, [isAuthenticated, user?.id, syncActiveSession]);
+
+  // ========== แอปกลับจาก background → sync ใหม่ ==========
+  // ระหว่างอยู่เบื้องหลัง socket มักหลุด → พลาด event (เช่น chargingStopped) และ server ลืม session room
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    let lastState: AppStateStatus = AppState.currentState;
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active' && lastState !== 'active') {
+        ensureSocketConnected();
+        syncActiveSession({ navigate: false });
+      }
+      lastState = nextState;
+    });
+
+    return () => subscription.remove();
+  }, [isAuthenticated, syncActiveSession]);
 
   // ========== Socket Event Listeners ==========
   const setupSocketListeners = () => {
@@ -319,6 +527,7 @@ const AppContent: React.FC = () => {
     }
     
     disconnectSocket();
+    clearLastSessionId(); // session ที่จำไว้เป็นของ user คนนี้ — ไม่ให้คนที่ login ต่อเห็น
     setCurrentScreen('Login');
     setActiveTab('main');
     setIsCharging(false);
@@ -431,6 +640,8 @@ const AppContent: React.FC = () => {
 
         // Join session room เพื่อรับ events
         joinSession(sessionId);
+        // จำไว้ในเครื่อง — ถ้าแอปถูกปัดทิ้งระหว่างชาร์จ เปิดใหม่จะกลับเข้า transaction นี้ได้
+        saveLastSessionId(sessionId);
         
         // Note: state จะเปลี่ยนเป็น "Charging" เมื่อได้ chargingStarted event
       } else {
@@ -493,15 +704,21 @@ const AppContent: React.FC = () => {
   }, [isWaitingUnplug, selectedCharger]);
 
   const handleGoToCharging = useCallback(() => {
-    setCurrentScreen('Charging');
-    setActiveTab('charger');
-  }, []);
+    if (currentSession && selectedStation && selectedCharger) {
+      setCurrentScreen('Charging');
+      setActiveTab('charger');
+      return;
+    }
+    // ข้อมูลในแอปไม่ครบ (เช่นโหลดสถานีไม่สำเร็จตอนเปิดแอป) → ดึงจาก server ใหม่แล้วพาไปหน้า Charging
+    syncActiveSession({ navigate: true });
+  }, [currentSession, selectedStation, selectedCharger, syncActiveSession]);
 
   const handleFinish = useCallback(() => {
     // Leave session room
     if (currentSession?.id) {
       leaveSession(currentSession.id);
     }
+    clearLastSessionId(); // ดูสรุปแล้ว → ไม่ต้องตามหา session นี้อีก
 
     setIsCharging(false);
     setIsWaitingUnplug(false);
@@ -581,6 +798,7 @@ const AppContent: React.FC = () => {
             onGoToCharging={handleGoToCharging}
             isCharging={isCharging}
             currentChargerId={selectedCharger?.id}
+            currentChargerType={selectedCharger?.type}
             activeTab="charger"
             onTabChange={handleTabChange}
             isLoading={isStartingCharge}
@@ -652,6 +870,7 @@ const AppContent: React.FC = () => {
                   onGoToCharging={handleGoToCharging}
                   isCharging={isCharging}
                   currentChargerId={selectedCharger?.id}
+                  currentChargerType={selectedCharger?.type}
                   activeTab="charger"
                   onTabChange={handleTabChange}
                   isLoading={isStartingCharge}
