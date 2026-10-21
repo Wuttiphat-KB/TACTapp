@@ -3,7 +3,7 @@ import WebSocket from 'ws';
 import { Server as SocketIOServer } from 'socket.io';
 import ChargingSession from '../models/ChargingSession';
 import Station from '../models/Station';
-import { triggerAllConnectorStatus } from './ocppBridge';
+import { triggerAllConnectorStatus, remoteStop, dataTransfer } from './ocppBridge';
 import { getCsmsCookie, clearCsmsCookie } from './csmsAuth';
 
 const CSMS_WS = process.env.CSMS_WS_URL || 'ws://127.0.0.1:8080/ws';
@@ -27,6 +27,86 @@ const pendingFinalize = new Map<string, NodeJS.Timeout>();
 const METER_ACTIVE_MS = 30_000;
 // หน่วงก่อน finalize ผ่าน fallback เพื่อรอดูว่า MeterValues หยุดจริงมั้ย
 const FINALIZE_GRACE_MS = 30_000;
+
+// session DC ที่ค้าง Preparing (ตู้ไม่ส่ง StartTransaction) นานเกินนี้ → ยกเลิกให้อัตโนมัติ
+// ปกติ: Start_Gen 15 วิ + remote_start + รถ handshake ≈ 30–60 วิ
+const PREPARING_TIMEOUT_MS = 4 * 60_000;
+const PREPARING_WATCHDOG_MS = 30_000;
+// ตู้ส่ง StartTransaction มาหลัง session ถูกยกเลิกไปแล้วภายในเวลานี้ → สั่งหยุดทันที (กันชาร์จไม่มีเจ้าของ)
+const LATE_START_WINDOW_MS = 30 * 60_000;
+// error code ของ session ที่ไม่เคยเริ่มชาร์จจริง (ผู้ใช้ยกเลิก / ตู้ไม่ตอบ)
+export const ABORTED_START_CODES = ['CANCELLED', 'START_TIMEOUT'];
+
+let ioRef: SocketIOServer | null = null;
+
+/**
+ * หา sessionId จาก transactionId — ใช้ map ใน RAM ก่อน ถ้าไม่มี (backend restart) หาใน DB แล้ว cache
+ * (เดิม restart ระหว่างชาร์จ = MeterValues/StopTransaction จับคู่ไม่ได้ → แอปค้างหน้า "กรุณาถอดสาย")
+ */
+async function sessionIdForTxn(txnId: number): Promise<string | undefined> {
+  const cached = txnToSession.get(txnId);
+  if (cached) return cached;
+  if (txnId === undefined || txnId === null) return undefined;
+
+  const session = await ChargingSession.findOne({ transactionId: txnId, status: 'Active' });
+  if (!session) return undefined;
+
+  const sessionId = session._id.toString();
+  txnToSession.set(txnId, sessionId);
+  if (!sessionStartTime.has(sessionId)) sessionStartTime.set(sessionId, session.startTime);
+  console.log(`[CSMS] txnId ${txnId} → session ${sessionId} (recovered from DB)`);
+  return sessionId;
+}
+
+/**
+ * ดับ generator ถ้าไม่มี session อื่นที่ยังใช้ไฟอยู่ (ทั้ง DC และ AC ใช้เครื่องเดียวกัน)
+ * ใช้ DataTransfer StopGen ตัวเดียวกับปุ่มหยุด AC (CP.py กันไว้อีกชั้นถ้าหัว DC ยังมี transaction)
+ */
+async function stopGenIfIdle(cpId: string, exceptSessionId: string): Promise<void> {
+  const other = await ChargingSession.findOne({
+    cpId,
+    status: 'Active',
+    state: { $in: ['Preparing', 'Charging'] },
+    _id: { $ne: exceptSessionId },
+  });
+  if (other) {
+    console.log(`[CSMS] StopGen skipped — session ${other._id} still uses the generator`);
+    return;
+  }
+  const r = await dataTransfer('StopGen');
+  console.log(`[CSMS] StopGen after aborted start: ${r.success ? 'sent' : `failed (${r.error || r.status})`}`);
+}
+
+/**
+ * ยกเลิก session DC ที่ยังไม่เริ่มชาร์จจริง (ผู้ใช้กดยกเลิก / ตู้ไม่ตอบภายในเวลา)
+ * - ปิด session + แจ้งแอป (chargingStopped reason Cancelled/StartTimeout → แอปกลับหน้า Charger ไม่ใช่หน้าสรุป)
+ * - ดับ generator ที่ CP.py สั่งติดไปแล้ว (CP.py ไม่มีทางดับเองถ้ารถไม่เคยเริ่มชาร์จ)
+ */
+export async function abortPreparingSession(session: any, reason: 'Cancelled' | 'StartTimeout'): Promise<void> {
+  session.state = 'Stopped';
+  session.status = 'Inactive';
+  session.endTime = new Date();
+  session.errorCode = reason === 'Cancelled' ? 'CANCELLED' : 'START_TIMEOUT';
+  await session.save();
+  idTagToUser.delete(String(session.idTag).toUpperCase());
+
+  const sessionId = session._id.toString();
+  console.log(`[CSMS] Session ${sessionId} aborted before charging started (${reason})`);
+  ioRef?.to(sessionRooms(session)).emit('chargingStopped', {
+    sessionId,
+    energyCharged: 0,
+    chargingTime: 0,
+    totalPrice: 0,
+    carbonReduce: 0,
+    reason,
+  });
+
+  try {
+    await stopGenIfIdle(session.cpId, sessionId);
+  } catch (e) {
+    console.error('[CSMS] stopGenIfIdle error:', e);
+  }
+}
 
 /**
  * ห้องที่ต้องส่ง event ของ session ไป: ห้องของ session + ห้องของเจ้าของ session
@@ -102,17 +182,32 @@ async function recheckFinalize(sessionId: string, io: SocketIOServer): Promise<v
 export function initCSMSListener(io: SocketIOServer): void {
   let ws: WebSocket;
   let reconnectAttempts = 0;
-  const maxReconnectAttempts = 10;
+  ioRef = io;
 
-  function scheduleReconnect() {
-    if (reconnectAttempts < maxReconnectAttempts) {
-      reconnectAttempts++;
-      const delay = Math.min(5000 * reconnectAttempts, 30000);
-      console.log(`[CSMS] Reconnecting in ${delay / 1000}s... (attempt ${reconnectAttempts})`);
-      setTimeout(connect, delay);
-    } else {
-      console.error('[CSMS] Max reconnect attempts reached');
+  // ===== Watchdog: session DC ที่ค้าง Preparing นานเกิน → ยกเลิกให้ (ครอบกรณีแอปถูกปิดไปแล้วด้วย) =====
+  setInterval(async () => {
+    try {
+      const stuck = await ChargingSession.find({
+        state: 'Preparing',
+        status: 'Active',
+        chargerType: { $ne: 'AC' },
+        startTime: { $lt: new Date(Date.now() - PREPARING_TIMEOUT_MS) },
+      });
+      for (const session of stuck) {
+        await abortPreparingSession(session, 'StartTimeout');
+      }
+    } catch (e) {
+      console.error('[CSMS] Preparing watchdog error:', e);
     }
+  }, PREPARING_WATCHDOG_MS);
+
+  // เดิม: เลิกต่อใหม่ถาวรหลัง 10 ครั้ง → CSMS ล่มไม่กี่นาที = backend ไม่รับ event อีกเลย
+  // ทุก session ค้าง "กำลังเริ่มชาร์จ" จนกว่าจะ restart backend → ตอนนี้ลองใหม่ไปเรื่อย ๆ (ห่างสุด 30 วิ)
+  function scheduleReconnect() {
+    reconnectAttempts++;
+    const delay = Math.min(5000 * reconnectAttempts, 30000);
+    console.log(`[CSMS] Reconnecting in ${delay / 1000}s... (attempt ${reconnectAttempts})`);
+    setTimeout(connect, delay);
   }
 
   async function connect() {
@@ -188,7 +283,20 @@ export function initCSMSListener(io: SocketIOServer): void {
             });
 
             if (!session) {
-              console.log(`[CSMS] StartTransaction: No preparing session for ${idTag}`);
+              // ตู้เพิ่งเริ่มชาร์จหลังจาก session ถูกยกเลิกไปแล้ว (ผู้ใช้กดยกเลิก / timeout)
+              // → ไม่มีใครเห็นหรือหยุดได้จากแอป และ generator วิ่งต่อ → สั่งหยุดทันที
+              const aborted = await ChargingSession.findOne({
+                idTag: upperIdTag,
+                errorCode: { $in: ABORTED_START_CODES },
+                endTime: { $gt: new Date(Date.now() - LATE_START_WINDOW_MS) },
+              });
+              if (aborted && txnId != null) {
+                console.log(`[CSMS] StartTransaction txn ${txnId} arrived after session ${aborted._id} was ${aborted.errorCode} → RemoteStop`);
+                const r = await remoteStop(txnId);
+                console.log(`[CSMS] RemoteStop for late start: ${r.success ? r.result?.status : r.error}`);
+              } else {
+                console.log(`[CSMS] StartTransaction: No preparing session for ${idTag}`);
+              }
               break;
             }
 
@@ -217,7 +325,7 @@ export function initCSMSListener(io: SocketIOServer): void {
           // ========== MeterValues ==========
           case 'MeterValues': {
             const { txnId, values, connector } = data;
-            const sessionId = txnToSession.get(txnId);
+            const sessionId = await sessionIdForTxn(txnId);
             if (sessionId) lastMeterAt.set(sessionId, Date.now());
 
             if (!sessionId) {
@@ -276,7 +384,7 @@ export function initCSMSListener(io: SocketIOServer): void {
           // ========== StopTransaction ==========
           case 'StopTransaction': {
             const { txnId, meterStop, energy, reason } = data;
-            const sessionId = txnToSession.get(txnId);
+            const sessionId = await sessionIdForTxn(txnId);
             
             if (!sessionId) {
               console.log(`[CSMS] StopTransaction: Unknown txnId ${txnId}`);

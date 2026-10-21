@@ -28,7 +28,14 @@ interface ChargingScreenProps {
   isLoading?: boolean;
   isPreparing?: boolean;      // ← NEW: กำลังรอ Charger เริ่ม
   isWaitingUnplug?: boolean;  // ← NEW: กำลังรอถอดสาย
+  onCancelStart?: () => void;          // ยกเลิกระหว่างรอตู้เริ่มชาร์จ
+  onDismissWaitingUnplug?: () => void; // ปิดหน้าต่าง "กรุณาถอดสาย" (กดหยุดซ้ำได้)
 }
+
+// ปกติตู้เริ่มชาร์จใน ~30–60 วิ (สั่ง generator 15 วิ + รถ handshake) → เกินนี้ให้ยกเลิกได้
+const CANCEL_START_AFTER_S = 60;
+// รอ StopTransaction นานเกินนี้ → ให้ปิดหน้าต่างแล้วกดหยุดซ้ำได้ (ไม่ติดอยู่ในหน้าต่าง)
+const DISMISS_UNPLUG_AFTER_S = 90;
 
 export const ChargingScreen: React.FC<ChargingScreenProps> = ({
   station,
@@ -42,8 +49,35 @@ export const ChargingScreen: React.FC<ChargingScreenProps> = ({
   isLoading = false,
   isPreparing = false,
   isWaitingUnplug = false,
+  onCancelStart,
+  onDismissWaitingUnplug,
 }) => {
   const { t, language } = useLanguage();
+
+  // ========== นาฬิกาสำหรับหน้าต่าง Preparing / รอถอดสาย ==========
+  // นับ Preparing จาก session.startTime (เปิดแอปกลับมาใหม่ก็นับต่อ ไม่เริ่ม 0)
+  const [now, setNow] = useState(Date.now());
+  const waitingSinceRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!isPreparing && !isWaitingUnplug) return;
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, [isPreparing, isWaitingUnplug]);
+  useEffect(() => {
+    waitingSinceRef.current = isWaitingUnplug ? Date.now() : null;
+  }, [isWaitingUnplug]);
+  const preparingSeconds = Math.floor((now - new Date(session.startTime).getTime()) / 1000);
+  const waitingSeconds = waitingSinceRef.current ? Math.floor((now - waitingSinceRef.current) / 1000) : 0;
+  const canCancelStart = !!onCancelStart && preparingSeconds >= CANCEL_START_AFTER_S;
+  const canDismissUnplug = !!onDismissWaitingUnplug && waitingSeconds >= DISMISS_UNPLUG_AFTER_S;
+
+  const handleCancelStart = () => {
+    if (isLoading) return;
+    Alert.alert(t('cancelStart'), t('cancelStartConfirm'), [
+      { text: language === 'th' ? 'รอต่อ' : 'Keep waiting', style: 'cancel' },
+      { text: t('cancelStart'), style: 'destructive', onPress: () => onCancelStart?.() },
+    ]);
+  };
 
   // ========== Smooth Timer ==========
   // นับจาก session.startTime เป็นหลัก → กลับเข้าหน้านี้ใหม่แล้วเวลาไม่รีเซ็ตเป็น 0
@@ -275,6 +309,24 @@ export const ChargingScreen: React.FC<ChargingScreenProps> = ({
               <View className="w-2 h-2 bg-green-300 rounded-full mx-1" />
               <View className="w-2 h-2 bg-green-200 rounded-full mx-1" />
             </View>
+
+            {/* ตู้ช้ากว่าปกติ → ให้ยกเลิกได้ (เดิมไม่มีทางออกจากหน้าต่างนี้เลย) */}
+            {canCancelStart && (
+              <View className="w-full mt-6 items-center">
+                <Text className="text-gray-500 text-center text-sm mb-3">{t('preparingSlowHint')}</Text>
+                <TouchableOpacity
+                  className={`w-full rounded-lg py-3 items-center border ${isLoading ? 'border-red-200' : 'border-red-500'}`}
+                  onPress={handleCancelStart}
+                  disabled={isLoading}
+                >
+                  {isLoading ? (
+                    <ActivityIndicator color="#ef4444" size="small" />
+                  ) : (
+                    <Text className="text-red-500 font-semibold">{t('cancelStart')}</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
         </View>
       </Modal>
@@ -312,6 +364,19 @@ export const ChargingScreen: React.FC<ChargingScreenProps> = ({
                 {language === 'th' ? 'รอการถอดสาย...' : 'Waiting for unplug...'}
               </Text>
             </View>
+
+            {/* รอนานผิดปกติ → ปิดหน้าต่างแล้วกดหยุดซ้ำได้ (เดิมติดอยู่ในหน้าต่างนี้) */}
+            {canDismissUnplug && (
+              <View className="w-full mt-6 items-center">
+                <Text className="text-gray-500 text-center text-sm mb-3">{t('unplugSlowHint')}</Text>
+                <TouchableOpacity
+                  className="w-full rounded-lg py-3 items-center border border-gray-400"
+                  onPress={() => onDismissWaitingUnplug?.()}
+                >
+                  <Text className="text-gray-700 font-semibold">{t('closeWindow')}</Text>
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
         </View>
       </Modal>

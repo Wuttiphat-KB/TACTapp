@@ -2,7 +2,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { View, SafeAreaView, StatusBar, Alert, AppState, AppStateStatus } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { LanguageProvider } from './src/contexts/LanguageContext';
+import { LanguageProvider, useLanguage } from './src/contexts/LanguageContext';
 import { AuthProvider, useAuth } from './src/contexts/AuthContext';
 import {
   LoadingScreen,
@@ -56,6 +56,14 @@ type AppScreen =
 const LAST_SESSION_KEY = 'tact_last_session_id';
 // session ที่จบนานเกินนี้แล้ว (และไม่ได้เปิดค้างไว้ในแอป) ไม่ต้องเด้งหน้าสรุปแล้ว
 const SUMMARY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+// ระหว่างรอตู้ (เริ่มชาร์จ / หยุดชาร์จ) เช็คกับ server เป็นระยะ เผื่อพลาด event จาก socket
+const WAITING_POLL_MS = 8000;
+// session ที่ไม่เคยเริ่มชาร์จจริง (ผู้ใช้ยกเลิก / ตู้ไม่ตอบภายในเวลา — backend ยกเลิกให้)
+type AbortedStartReason = 'Cancelled' | 'StartTimeout';
+const ABORTED_START_CODES: Record<string, AbortedStartReason> = {
+  CANCELLED: 'Cancelled',
+  START_TIMEOUT: 'StartTimeout',
+};
 
 const saveLastSessionId = async (sessionId: string) => {
   try {
@@ -163,8 +171,12 @@ const stationFromSession = (s: any): Station | null => {
 };
 
 const AppContent: React.FC = () => {
-  const { isAuthenticated, user } = useAuth();
-  
+  const { isAuthenticated, user, isLoading: isAuthLoading } = useAuth();
+  const { t } = useLanguage();
+  // socket listener ลงทะเบียนครั้งเดียว → ใช้ ref ให้เห็นภาษาปัจจุบันเสมอ
+  const tRef = useRef(t);
+  tRef.current = t;
+
   // Navigation state
   const [currentScreen, setCurrentScreen] = useState<AppScreen>('Loading');
   const [activeTab, setActiveTab] = useState<TabName>('main');
@@ -205,6 +217,35 @@ const AppContent: React.FC = () => {
   useEffect(() => { currentSessionRef.current = currentSession; }, [currentSession]);
   useEffect(() => { currentScreenRef.current = currentScreen; }, [currentScreen]);
   useEffect(() => { selectedStationRef.current = selectedStation; }, [selectedStation]);
+
+  // ========== session ที่ไม่เคยเริ่มชาร์จ (ยกเลิก / ตู้ไม่ตอบ) → กลับหน้า Charger ==========
+  // ไม่ใช่หน้าสรุป (ไม่มีอะไรให้สรุป) และต้องไม่ค้างอยู่ในหน้าต่าง "กำลังเริ่มชาร์จ"
+  // event อาจมาทั้งจาก HTTP response และ socket → กันทำซ้ำ/แจ้งเตือนซ้ำด้วย id
+  const abortedSessionIdsRef = useRef(new Set<string>());
+  const resetAfterAbortedStart = useCallback((sessionId: string, reason: AbortedStartReason, notify = true) => {
+    if (abortedSessionIdsRef.current.has(sessionId)) return;
+    abortedSessionIdsRef.current.add(sessionId);
+
+    leaveSession(sessionId);
+    clearLastSessionId();
+    setIsCharging(false);
+    setIsWaitingUnplug(false);
+    setIsStoppingCharge(false);
+    isStoppingRef.current = false;
+    setCurrentSession(null);
+    setSelectedCharger(null);
+    setCurrentScreen(selectedStationRef.current ? 'StationDetail' : 'MainTabs');
+    setActiveTab('charger');
+
+    if (notify) {
+      const tr = tRef.current;
+      if (reason === 'StartTimeout') {
+        Alert.alert(tr('startTimeoutTitle'), tr('startTimeoutMsg'));
+      } else {
+        Alert.alert(tr('startCancelledTitle'), tr('startCancelledMsg'));
+      }
+    }
+  }, []);
 
   const loadSessionStation = useCallback(async (s: any): Promise<Station | null> => {
     const stationId = sessionStationId(s);
@@ -298,6 +339,18 @@ const AppContent: React.FC = () => {
         return;
       }
 
+      // ไม่เคยเริ่มชาร์จจริง (ยกเลิก / ตู้ไม่ตอบ) → ไม่มีหน้าสรุป กลับหน้า Charger
+      const abortedReason = ABORTED_START_CODES[s.errorCode as string];
+      if (abortedReason) {
+        pendingNavigateRef.current = false;
+        if (localPendingId) {
+          resetAfterAbortedStart(String(s._id), abortedReason); // ผู้ใช้กำลังรออยู่ → บอกเหตุผล
+        } else {
+          await clearLastSessionId();
+        }
+        return;
+      }
+
       const endedAt = s.endTime ? new Date(s.endTime).getTime() : Date.now();
       if (!localPendingId && Date.now() - endedAt > SUMMARY_MAX_AGE_MS) {
         // จบไปนานแล้ว ไม่ต้องเด้งหน้าสรุป
@@ -323,7 +376,7 @@ const AppContent: React.FC = () => {
     } finally {
       isSyncingRef.current = false;
     }
-  }, [loadSessionStation]);
+  }, [loadSessionStation, resetAfterAbortedStart]);
 
   // ========== Socket.IO Connection ==========
   useEffect(() => {
@@ -356,6 +409,9 @@ const AppContent: React.FC = () => {
       // Cleanup on unmount
       disconnectSocket();
     };
+    // setupSocketListeners ลงทะเบียนครั้งเดียวต่อการ login (กันด้วย socketListenersRef)
+    // และใช้แต่ setter / ref / callback ที่ไม่เปลี่ยน → ไม่ต้องอยู่ใน deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated, user?.id, syncActiveSession]);
 
   // ========== แอปกลับจาก background → sync ใหม่ ==========
@@ -374,6 +430,17 @@ const AppContent: React.FC = () => {
 
     return () => subscription.remove();
   }, [isAuthenticated, syncActiveSession]);
+
+  // ========== ระหว่างรอตู้ → เช็คกับ server เป็นระยะ ==========
+  // หน้าต่าง "กำลังเริ่มชาร์จ" / "กรุณาถอดสาย" เดิมรอแค่ event จาก socket อย่างเดียว
+  // ถ้า event หลุด (เน็ตสะดุด, backend restart) ผู้ใช้ติดอยู่ในหน้าต่างนั้นตลอด
+  const isWaitingForCharger =
+    currentScreen === 'Charging' && (isWaitingUnplug || currentSession?.state === 'Preparing');
+  useEffect(() => {
+    if (!isWaitingForCharger) return;
+    const timer = setInterval(() => syncActiveSession({ navigate: false }), WAITING_POLL_MS);
+    return () => clearInterval(timer);
+  }, [isWaitingForCharger, syncActiveSession]);
 
   // ========== Socket Event Listeners ==========
   const setupSocketListeners = () => {
@@ -415,7 +482,15 @@ const AppContent: React.FC = () => {
     // เมื่อชาร์จเสร็จ
     onChargingStopped((data) => {
       console.log('[Socket] Charging stopped:', data);
-      
+
+      // ยกเลิกก่อนเริ่มชาร์จจริง (ผู้ใช้กดยกเลิก / ตู้ไม่ตอบภายในเวลา) → กลับหน้า Charger ไม่ใช่หน้าสรุป
+      if (data.reason === 'Cancelled' || data.reason === 'StartTimeout') {
+        if (currentSessionRef.current?.id === data.sessionId) {
+          resetAfterAbortedStart(data.sessionId, data.reason);
+        }
+        return;
+      }
+
       // Reset waiting states
       setIsWaitingUnplug(false);
       setIsStoppingCharge(false);
@@ -512,9 +587,16 @@ const AppContent: React.FC = () => {
   }, [currentSession]);
 
   // ========== Navigation Handlers ==========
+  // ออกจากหน้า Loading เมื่อครบ 2 วิ "และ" เช็ค login เสร็จแล้ว
+  // (เดิมครบ 2 วิก็ไปเลย → เน็ตช้าตอนเปิดแอป = เด้งไปหน้า Login ทั้งที่ login ค้างไว้อยู่)
+  const [loadingTimerDone, setLoadingTimerDone] = useState(false);
   const handleLoadingFinish = useCallback(() => {
-    setCurrentScreen(isAuthenticated ? 'MainTabs' : 'Login');
-  }, [isAuthenticated]);
+    setLoadingTimerDone(true);
+  }, []);
+  useEffect(() => {
+    if (!loadingTimerDone || isAuthLoading) return;
+    setCurrentScreen((prev) => (prev === 'Loading' ? (isAuthenticated ? 'MainTabs' : 'Login') : prev));
+  }, [loadingTimerDone, isAuthLoading, isAuthenticated]);
 
   const handleLoginSuccess = useCallback(() => {
     setCurrentScreen('MainTabs');
@@ -644,11 +726,19 @@ const AppContent: React.FC = () => {
         saveLastSessionId(sessionId);
         
         // Note: state จะเปลี่ยนเป็น "Charging" เมื่อได้ chargingStarted event
+      } else if (response.data?.sessionId) {
+        // มี session ค้างอยู่แล้ว (เช่นครั้งก่อนแอปขึ้น error แต่ตู้รับคำสั่งไปแล้ว) → พาเข้า session นั้นแทนการขึ้น error
+        console.log('[App] Already has an active session → going to it:', response.data.sessionId);
+        syncActiveSession({ navigate: true });
       } else {
         Alert.alert(
           'Error',
           response.message || response.error || 'Failed to start charging'
         );
+        // ไม่ได้คำตอบ (timeout) ≠ ตู้ไม่รับคำสั่ง — server อาจสร้าง session ไปแล้ว → เช็คแล้วพาเข้าไปถ้ามี
+        if (response.networkError) {
+          syncActiveSession({ navigate: true });
+        }
       }
     } catch (error) {
       console.error('[API] Start charging error:', error);
@@ -657,7 +747,7 @@ const AppContent: React.FC = () => {
       isStartingRef.current = false;
       setIsStartingCharge(false);
     }
-  }, [selectedStation, user]);
+  }, [selectedStation, user, syncActiveSession]);
 
   // ========== STOP CHARGING — OCPP ==========
   const handleStopCharging = useCallback(async (session: ChargingSession) => {
@@ -674,6 +764,12 @@ const AppContent: React.FC = () => {
       const response = await apiClient.stopCharging(session.id);
 
       if (response.success) {
+        // ยังไม่เริ่มชาร์จจริง → server ยกเลิก session ให้ (ไม่มี StopTransaction ตามมา ห้ามรอถอดสาย)
+        if (response.data?.state === 'Cancelled') {
+          console.log('[API] Start cancelled before charging began');
+          resetAfterAbortedStart(session.id, 'Cancelled');
+          return;
+        }
         // AC ไม่มี chargingStopped event (ไม่มีสาย CP) → finalize เอง ไม่ต้องรอถอดสาย
         if (selectedCharger?.type === 'AC') {
           console.log('[API] AC stop — finalizing locally');
@@ -693,7 +789,10 @@ const AppContent: React.FC = () => {
         console.warn('[API] Stop response:', response.message);
         isStoppingRef.current = false;
         setIsStoppingCharge(false);
-        // ยังคงรอ event จาก Socket
+        // เดิมเงียบ — ผู้ใช้กดหยุดแล้วไม่มีอะไรเกิดขึ้น ไม่รู้ว่าต้องกดใหม่
+        Alert.alert(t('stopFailedTitle'), response.message || response.error || 'Failed to stop charging');
+        // เช็คสถานะจริงกับ server (อาจหยุดไปแล้ว หรือ session ถูกปิดทางอื่น)
+        syncActiveSession({ navigate: false });
       }
     } catch (error) {
       console.error('[API] Stop charging error:', error);
@@ -701,7 +800,7 @@ const AppContent: React.FC = () => {
       isStoppingRef.current = false;
       setIsStoppingCharge(false);
     }
-  }, [isWaitingUnplug, selectedCharger]);
+  }, [isWaitingUnplug, selectedCharger, resetAfterAbortedStart, syncActiveSession, t]);
 
   const handleGoToCharging = useCallback(() => {
     if (currentSession && selectedStation && selectedCharger) {
@@ -826,6 +925,8 @@ const AppContent: React.FC = () => {
             isLoading={isStoppingCharge}
             isPreparing={currentSession.state === 'Preparing'}
             isWaitingUnplug={isWaitingUnplug}
+            onCancelStart={() => handleStopCharging(currentSession)}
+            onDismissWaitingUnplug={() => setIsWaitingUnplug(false)}
           />
         );
       

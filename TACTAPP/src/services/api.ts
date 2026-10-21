@@ -52,6 +52,9 @@ interface RegisterRequest {
   line?: string;
 }
 
+// คำสั่งที่ต้องรอตู้ชาร์จตอบ (start/stop)
+const CHARGER_COMMAND_TIMEOUT = 30000;
+
 // ===== Token Storage Key =====
 const TOKEN_KEY = 'tact_auth_token';
 
@@ -104,7 +107,8 @@ class ApiClient {
   // ===== Base Request =====
   private async request<T>(
     endpoint: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
+    timeoutMs: number = API_TIMEOUT
   ): Promise<ApiResponse<T>> {
     await this.tokenReady;
     const url = `${this.baseUrl}${endpoint}`;
@@ -117,7 +121,7 @@ class ApiClient {
 
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT);
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
       const response = await fetch(url, {
         ...options,
@@ -134,6 +138,7 @@ class ApiClient {
           success: false,
           error: data.message || 'Request failed',
           message: data.message,
+          data: data.data, // เช่น /charging/start ตอบ sessionId ของ session ที่ค้างอยู่มาด้วย
         };
       }
 
@@ -200,17 +205,19 @@ class ApiClient {
 
   // ===== Charging Methods =====
 
+  // start/stop รอตู้ตอบผ่าน CSMS — CP.py อาจติด sleep ~17 วิ (สั่ง generator) ระหว่างนั้น
+  // ให้เวลานานกว่า request ปกติ ไม่งั้นแอปขึ้น error ทั้งที่ตู้รับคำสั่งไปแล้ว
   async startCharging(stationId: string, chargerId: string, connectorId: number = 1): Promise<ApiResponse<any>> {
     return this.request('/charging/start', {
       method: 'POST',
       body: JSON.stringify({ stationId, chargerId, connectorId }),
-    });
+    }, CHARGER_COMMAND_TIMEOUT);
   }
 
   async stopCharging(sessionId: string): Promise<ApiResponse<any>> {
     return this.request(`/charging/${sessionId}/stop`, {
       method: 'POST',
-    });
+    }, CHARGER_COMMAND_TIMEOUT);
   }
 
   async updateCharging(sessionId: string, data: {

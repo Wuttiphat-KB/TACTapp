@@ -12,7 +12,7 @@ import {
   generateIdTag,
   getConnectorStatus
 } from '../services/ocppBridge';
-import { registerIdTagUser, unregisterIdTag } from '../services/csmsListener';
+import { registerIdTagUser, unregisterIdTag, abortPreparingSession } from '../services/csmsListener';
 import { getAcMeter, emitAcChargingStopped } from '../services/acMeterState';
 
 const router = Router();
@@ -79,9 +79,12 @@ router.post(
       }
 
       // หา Charger/Connector
-      const charger = station.chargers.find(c => 
-        c.id === chargerId || c.id === `connector-${connectorId}`
-      );
+      // หา id ตรงก่อน — ค่อย fallback "connector-N" เมื่อไม่มี id ตรง
+      // (เดิมเช็คสองเงื่อนไขในรอบเดียว: AC ส่ง connectorId=1 มา → ไปเจอหัว DC "connector-1" ที่อยู่ก่อน
+      //  → session ถูกบันทึกเป็น CCS2 และยิง RemoteStart หัว DC แทนการสั่ง generator)
+      const charger =
+        station.chargers.find(c => c.id === chargerId) ||
+        station.chargers.find(c => c.id === `connector-${connectorId}`);
       
       const pricePerKwh = charger?.pricePerKwh || 7.5;
       const chargerType = charger?.type || 'CCS2';
@@ -150,10 +153,16 @@ router.post(
         startTime: new Date(),
       });
 
-      // อัพเดทสถานะ charger ใน Station
+      // อัพเดทสถานะ charger ใน Station — ห้ามให้ error ตรงนี้ทำ request ล้ม
+      // (ถึงจุดนี้ตู้รับคำสั่งและ session ถูกสร้างแล้ว ถ้าตอบ 500 แอปจะขึ้น error ทั้งที่ตู้เริ่มทำงาน
+      //  เช่น status เดิมใน DB เป็นค่าที่ schema ไม่รู้จัก 'Unavailable' → validation error ตอน save)
       if (charger) {
-        charger.status = initialState;
-        await station.save();
+        try {
+          charger.status = initialState;
+          await station.save();
+        } catch (e) {
+          console.warn('[Charging] update charger status failed (ignored):', (e as Error).message);
+        }
       }
 
       console.log(`[Charging] Session created: ${session._id}, waiting for StartTransaction...`);
@@ -272,18 +281,14 @@ router.post(
       // ต้องมี transactionId ถึงจะ stop ได้
       if (!session.transactionId) {
         // ถ้ายัง Preparing อยู่ ให้ cancel session แทน
+        // (ปิด session + แจ้งแอป + ดับ generator ที่ CP.py สั่งติดไปแล้ว + ถ้าตู้เริ่มชาร์จทีหลังจะถูกสั่งหยุด)
         if (session.state === 'Preparing') {
-          session.state = 'Stopped';
-          session.status = 'Inactive';
-          session.endTime = new Date();
-          session.errorCode = 'CANCELLED';
-          await session.save();
-
-          unregisterIdTag(session.idTag);
+          await abortPreparingSession(session, 'Cancelled');
 
           res.json({
             success: true,
             message: 'Session cancelled (was still preparing)',
+            data: { sessionId: session._id, state: 'Cancelled' },
           });
           return;
         }

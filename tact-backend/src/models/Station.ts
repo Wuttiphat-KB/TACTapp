@@ -5,7 +5,9 @@ import mongoose, { Document, Schema } from 'mongoose';
 interface ICharger {
   id: string;
   type: 'CCS2' | 'AC';
-  status: 'Available' | 'Preparing' | 'Charging' | 'Finishing' | 'Faulted' | 'Offline';
+  status:
+    | 'Available' | 'Preparing' | 'Charging' | 'Finishing' | 'Faulted' | 'Offline'
+    | 'Unavailable' | 'SuspendedEV' | 'SuspendedEVSE' | 'Reserved';
   pricePerKwh: number;
   enabled: boolean;      // ← เพิ่มใหม่
   connectorId?: number;  // ← เพิ่มใหม่: OCPP connector ID (1 or 2)
@@ -61,7 +63,9 @@ const ChargerSchema = new Schema({
   },
   status: {
     type: String,
-    enum: ['Available', 'Preparing', 'Charging', 'Finishing', 'Faulted', 'Offline'],
+    // ครบทุกสถานะของ OCPP 1.6 — csmsListener เขียนสถานะจากตู้ลง DB ตรง ๆ (CP.py ส่ง Unavailable/SuspendedEV ได้)
+    // ถ้าขาดตัวไหน station.save() ครั้งถัดไป (เช่นตอน /charging/start) จะ validation error
+    enum: ['Available', 'Preparing', 'Charging', 'Finishing', 'Faulted', 'Offline', 'Unavailable', 'SuspendedEV', 'SuspendedEVSE', 'Reserved'],
     default: 'Available',
   },
   pricePerKwh: {

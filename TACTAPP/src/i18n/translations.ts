@@ -86,6 +86,16 @@ export const translations = {
     viewChargingStatus: 'View Charging Status',
     activeSessionHint: 'You have a charging session in progress.',
     connectorFinishing: 'Finished (please unplug)',
+    cancelStart: 'Cancel',
+    cancelStartConfirm: 'Cancel this charging request?',
+    preparingSlowHint: 'The charger is taking longer than usual. You can keep waiting or cancel.',
+    startCancelledTitle: 'Charging cancelled',
+    startCancelledMsg: 'The charging request was cancelled.',
+    startTimeoutTitle: 'Charger did not start',
+    startTimeoutMsg: 'The charger did not start charging in time. Please check the cable and try again.',
+    stopFailedTitle: 'Could not stop charging',
+    closeWindow: 'Close',
+    unplugSlowHint: 'If charging has already stopped but this screen has not changed, close it and press Stop again.',
     
     // Charging
     charging: 'Charging',
@@ -222,6 +232,16 @@ export const translations = {
     viewChargingStatus: 'ดูสถานะการชาร์จ',
     activeSessionHint: 'คุณมีการชาร์จที่กำลังดำเนินอยู่',
     connectorFinishing: 'ชาร์จเสร็จแล้ว (รอถอดสาย)',
+    cancelStart: 'ยกเลิกการเริ่มชาร์จ',
+    cancelStartConfirm: 'ต้องการยกเลิกการเริ่มชาร์จหรือไม่?',
+    preparingSlowHint: 'ตู้ใช้เวลานานกว่าปกติ รอต่อหรือยกเลิกได้',
+    startCancelledTitle: 'ยกเลิกการชาร์จแล้ว',
+    startCancelledMsg: 'ยกเลิกคำสั่งเริ่มชาร์จเรียบร้อยแล้ว',
+    startTimeoutTitle: 'ตู้ไม่เริ่มชาร์จ',
+    startTimeoutMsg: 'ตู้ไม่เริ่มชาร์จภายในเวลาที่กำหนด กรุณาตรวจสอบสายชาร์จแล้วลองใหม่',
+    stopFailedTitle: 'หยุดชาร์จไม่สำเร็จ',
+    closeWindow: 'ปิดหน้าต่างนี้',
+    unplugSlowHint: 'ถ้ารถหยุดชาร์จแล้วแต่หน้านี้ยังไม่เปลี่ยน ปิดหน้าต่างนี้แล้วกดหยุดอีกครั้งได้',
     
     // Charging
     charging: 'กำลังชาร์จ',

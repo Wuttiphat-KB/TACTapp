@@ -23,7 +23,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        const response = await apiClient.getMe();
+        // เน็ตสะดุดตอนเปิดแอป ≠ token หมดอายุ → ลองใหม่ก่อน ไม่งั้นผู้ใช้ถูกพาไปหน้า Login ทั้งที่ login ค้างไว้
+        let response = await apiClient.getMe();
+        for (let attempt = 1; attempt < 3 && !response.success && response.networkError; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
+          response = await apiClient.getMe();
+        }
 
         if (response.success && response.data?.user) {
           const u = response.data.user;
